@@ -29,14 +29,15 @@ def flatten(record: dict) -> dict:
 
 
 def fetch(query: str, page_size: int = 100, pause_s: float = 0.2) -> pd.DataFrame:
-    rows = []
+    rows, total = [], None
     url, params = API, {"query": query, "limit": page_size}
     while url:
         response = requests.get(url, params=params, timeout=60)
         response.raise_for_status()
         payload = response.json()
         rows.extend(flatten(r) for r in payload["results"])
-        print(f"\r{len(rows)}/{payload['count']}", end="", flush=True)
+        total = total or payload.get("count")  # only the first page carries the total
+        print(f"\r{len(rows)}/{total}", end="", flush=True)
         url, params = payload.get("next"), None  # 'next' already encodes the cursor and query
         time.sleep(pause_s)
     print()

@@ -6,6 +6,7 @@ Code workspace for the Mitacs project *Explainable AI for Enhancing Deep Learnin
 MedirAI/
 ├── README.md                 # this file
 ├── STUDENT2_PROJECT_PLAN.md  # Student 2 plan: TreeSHAP → concepts → LLM explanations
+├── requirements.txt          # core env (uncertaintyNet, splits, tests); requirements-nrc.txt adds NRC deps
 ├── splits/                   # persisted lesion/patient-grouped ISIC clinical split + builder + public metadata
 ├── tests/                    # CPU regression tests for the P0 fixes (python -m pytest tests -q)
 ├── uncertaintyNet-main/      # ACTIVE: ResNet50 + variational/uncertainty training & testing (Student 1 base)
@@ -38,4 +39,5 @@ The top-level folder names keep their upstream GitHub repo names (`poc-nrc`, `un
 - uncertaintyNet: `python train.py --config medir.json` then `python test.py --run <run_dir>`. MEDIRV2 reads `splits/isic_clinical_v1.csv`; override it with `"split_file"` in the config.
 - NRC: entry points are the `if __name__ == '__main__'` blocks in `medirai_inference.py` and `medirai_dnn_explainability_engine.py`. Models trained before 2026-09-25 must be retrained (see the P0 fixes commit).
 - Tests: `python -m pytest tests -q` (CPU; stubs optional heavy libraries when they're missing).
+- Images: `python splits/check_images.py --data-dir <dir> [--download]` checks or fetches every image in the split.
 - Both expect images outside the repo: `datasets/ISIC_clinical/<isic_id>.jpg` for uncertaintyNet (labels and split come from `splits/`), and `../../../data/...` paths in the NRC CSVs.

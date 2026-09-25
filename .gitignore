@@ -20,3 +20,6 @@ output/
 *.pt
 *.pth
 *.sav
+
+# Packages sent to collaborators (git bundles, zips)
+handoff/

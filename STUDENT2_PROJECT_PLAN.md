@@ -133,6 +133,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
   - **P0-9:** NRC import fix. It blocks Grad-CAM.
   - **P0-10/11:** `test.py` and checkpoint loading.
   - Then S1 re-baselines ResNet50 on the new split, and that one number is what both streams cite.
+  - ☑ Handoff Steps 1–4 prepared and verified locally (2026-09-25): `SHATHA_HANDOFF.md` (local), `splits/check_images.py`, `requirements*.txt`, and a git bundle. S1 still runs the tests, split check and image check on the VM.
   - S2-relevant P1 items: P1-15 (uniform logits export), P1-16 (Grad-CAM on the predicted class), P1-17 and P1-10 (mask quality and Dice).
 
 ### WS1: Shared feature layer (co-owned with S1) (M1 W3 → M2 W6)
