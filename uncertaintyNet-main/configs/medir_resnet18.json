@@ -1,0 +1,83 @@
+{
+    "Network": {
+        "Basic Setup": {
+            "network_type": "deterministic",
+            "architecture": "resnet18p_pretrained",
+            "layer_type": "conv", 
+            "task": "classification",
+            "input_size": 224,
+            "in_channels": 3,
+            "feature_size": [3, 64, 128, 256, 512],
+            "output_size": 2,
+            "kernel_size": 3, 
+            "padding_size": 1,
+            "pooling_size": 0, 
+            "stride": 1,
+            "nonlinearity": "relu",
+            "init_weights": "kaiming_n",
+            "use_batchnorm": false,
+            "dropout": 0,
+            "bias": true
+        }
+    },
+    "Training": {
+        "Dataset":{
+            "dataset": "medirv2",
+            "augment": true,
+            "num_points": 50000,
+            "train_val_split": 0.7,
+            "kfold": 1,
+            "batch_size": 64,
+            "run_val": true,
+            "val_patience": 5, 
+            "multi_label": false,
+            "flatten_input": false
+        },
+        "Parameters": {
+            "init_network": "",
+            "continue_run": false,
+            "num_epochs": 11,
+            "optimizer": "adam",
+            "lr": 0.00001,
+            "weight_decay": 1e-4,
+            "gpu": 0,
+            "num_workers": 0,               
+            "seed": 0,
+            "loss_func": "ce",
+            "label_smoothing": 0,
+            "precision": "32"
+        },
+        "LR Scheduler":{
+            "scheduler_type": "",
+            "step_size": [30, 60, 90],
+            "gamma": 0.1,
+            "min_lr": 1e-6,
+            "T_max": 200
+        },
+        "Bayesian Parameters": {
+            "kl_weight": "bayes_params",
+            "kl_weight_hi2low": true,
+            "kl_weight_lim": [0.01, 0.2],
+            "prior_mu": 0,
+            "prior_variance": 1,
+            "posterior_mu": 0,
+            "posterior_rho": -3,
+            "num_samples": 5
+        },
+        "Partial Bayesian Parameters": {
+            "init_network": ""
+        },
+        "Layer Bayesian Parameters": {
+            "train_bayes_layers_only": false,
+            "co_train_from_random": false,
+            "fully_bayes": true,
+            "last_layer": true,
+            "first_and_last": false
+        }
+    },
+    "Paths": {
+            "dataset_path": "", 
+            "training_path": "",
+            "save_path": "output/medir/resnet18"
+        }
+}

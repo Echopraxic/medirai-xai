@@ -1,0 +1,10 @@
+name: protoNet
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - matplotlib
+  - scikit-learn
+  - seaborn
+  - ipykernel
+  - h5py

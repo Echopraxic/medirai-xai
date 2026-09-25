@@ -1,0 +1,22 @@
+# Reference documents stay local (proprietary, not code)
+MedirAI Docs/
+
+# Python / notebooks
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large local artifacts
+data/
+datasets/
+output/
+*.pkl
+*.pt
+*.pth
+*.sav
