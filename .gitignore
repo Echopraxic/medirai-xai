@@ -23,3 +23,9 @@ output/
 
 # Packages sent to collaborators (git bundles, zips)
 handoff/
+
+# Local-only notes: only README.md files and STUDENT2_PROJECT_PLAN.md are published
+CLAUDE.md
+CODEBASE_TODO.md
+SHATHA_HANDOFF.md
+splits/*_report.md
