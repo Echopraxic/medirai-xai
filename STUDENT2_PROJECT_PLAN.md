@@ -118,14 +118,17 @@ Status: ☐ not started · ◐ in progress · ☑ done
 
 ### WS0: Onboarding and setup (M1, W1–2)
 
-- ☐ **T0.1** Request access to the prior-intern repos and model bucket (→ M-1). Read `app/extract_features.py`, `app/prompts.json`, `app/skin_lesion_analyzer.py`, and the fine-tuning scripts.
-- ☐ **T0.2** Get GCP VM + GPU access working over SSH/VS Code (→ M-2). Create a Python 3.12 env with `xgboost`/`lightgbm`, `shap`, `scikit-image`, `opencv`, `mahotas`/`pyradiomics` (optional), and `vllm` or `transformers`.
+- ◐ **T0.1** Request access to the prior-intern repos and model bucket (→ M-1). *Requested 2026-09-25; awaiting access.* Read `app/extract_features.py`, `app/prompts.json`, `app/skin_lesion_analyzer.py`, and the fine-tuning scripts.
+- ◐ **T0.2** Get GCP VM + GPU access working over SSH/VS Code (→ M-2). *Requested 2026-09-25; awaiting access.* Create a Python 3.12 env with `xgboost`/`lightgbm`, `shap`, `scikit-image`, `opencv`, `mahotas`/`pyradiomics` (optional), and `vllm` or `transformers`.
 - ☐ **T0.3** Set up a shared GitHub repo/folder layout with S1 for the feature layer (`features/`, `trees/`, `explain/`, `eval/`), plus experiment logging (CSV or W&B; W&B was already used for LLaVA fine-tuning).
 - ☐ **T0.4** Agree on the success criteria (§1) and the check-in cadence with the supervisor, S1, and MedirAI (→ M-9).
 - ☐ **T0.5** Kick off the ethics question with the supervisor (→ A-1). Clinician review in M3 is on the critical path.
-- ☐ **T0.6** Get S1's split file (→ S1-1). Inspect the ISIC clinical close-up metadata to see which diagnosis levels exist (`diagnosis_1` benign/malignant/indeterminate; finer levels for one-vs-all).
+- ☑ **T0.6** Split file built (done by S2 on S1's behalf, 2026-09-25): [splits/isic_clinical_v1.csv](splits/isic_clinical_v1.csv) plus its report (`splits/isic_clinical_v1_report.md`, written by the split script).
+  - Metadata for all 9,316 ISIC clinical close-ups was pulled from the public ISIC API into `splits/isic_clinical_closeup_metadata.csv`.
+  - Diagnosis levels: `diagnosis_1` (Benign 3,196 / Malignant 4,787 / Indeterminate 854 / missing 479); `diagnosis_3` for one-vs-all. **BCC dominates the malignant class** (3,396); melanoma subtypes total ~500.
+  - Useful for WS1/WS3: `clin_size_long_diam_mm` (**real mm diameter** for 1,229 images, mostly UFES), `fitzpatrick_skin_type` (2,457 images, 384 in types V–VI), anatomic site, age and sex.
 - ☑ **T0.7** Codebase unification (2026-09-25): removed the duplicate repo and duplicate CSVs, archived superseded code, put the workspace under git, wrote `CODEBASE_TODO.md` (local).
-- ☐ **T0.8** Stabilize the foundation with S1 before building on it (W2–W3). Items from `CODEBASE_TODO.md` (local):
+- ◐ **T0.8** Stabilize the foundation with S1 before building on it (W2–W3). **Code-side P0 fixes done on 2026-09-25** (all except P0-6, which is partial, plus the new P0-17); still needs the GPU re-baseline by S1. Items from `CODEBASE_TODO.md` (local):
   - **P0-1/2/3:** grouped + persisted split. This *is* S1-1, co-owned.
   - **P0-9:** NRC import fix. It blocks Grad-CAM.
   - **P0-10/11:** `test.py` and checkpoint loading.
@@ -253,9 +256,9 @@ Status: ☐ not started · ◐ in progress · ☑ done
 
 | ID | What I need | Needed by | Blocks | Status |
 |---|---|---|---|---|
-| S1-1 | Final train/val/test split file for ISIC clinical close-ups (70/10/20, **grouped by lesion/patient**, keyed by `isic_id`, all diagnosis levels). Produced by CODEBASE_TODO P0-1/P0-2 (co-owned) | M1 W2 (Oct 4) | T0.6, T0.8, T1.5, T2.2 | ☐ |
+| S1-1 | Final train/val/test split file for ISIC clinical close-ups (70/10/20, **grouped by lesion/patient**, keyed by `isic_id`, all diagnosis levels). Produced by CODEBASE_TODO P0-1/P0-2 (co-owned) | M1 W2 (Oct 4) | T0.6, T0.8, T1.5, T2.2 | ☑ `splits/isic_clinical_v1.csv` (built by S2, 2026-09-25). S1 to confirm it matches her image folder |
 | S1-2 | Co-design of the feature schema and extraction code; agreement on mask source and quality rules | M1 W3–4 | WS1 | ☐ |
-| S1-3 | ResNet50 checkpoint + per-image predictions/probabilities on val/test (CSV by `isic_id`). A preliminary version is fine at first; final at the End-M2 milestone | M2 W5 (prelim), W8 (final) | T2.5, T4.2 | ☐ |
+| S1-3 | ResNet50 checkpoint **retrained on `isic_clinical_v1` after the P0 fixes**, + per-image predictions/probabilities on val/test (CSV by `isic_id`). A preliminary version is fine at first; final at the End-M2 milestone | M2 W5 (prelim), W8 (final) | T2.5, T4.2 | ☐ |
 | S1-4 | Per-image uncertainty outputs: entropy-of-expected, expected entropy, variational variance, multi-model agreement/deferral flag, and which models disagreed | M2 W8 | T4.2, T6.5 | ☐ |
 | S1-5 | Binary tree model + its TreeSHAP values (for cross-checking against one-vs-all) | M2 W8 | T2.7 | ☐ |
 | S1-6 | ResNet50 penultimate-layer embeddings on all splits, only if embeddings are used as features | M2 W6 | T1.3 (opt.), T3.4 | ☐ |
@@ -273,9 +276,9 @@ Status: ☐ not started · ◐ in progress · ☑ done
 
 | ID | What I need | Needed by | Blocks | Status |
 |---|---|---|---|---|
-| M-1 | Access to `medirai_payload_generation_api`, the payload_generation fine-tuning/segmentation repo, `medirai_malignant_prediction_api` (`dev_chloe`), and GCS `medirai-storage-bucket-medirai-production/payload_generation_models` | M1 W1 | T0.1, T1.3 | ☐ |
-| M-2 | GCP VM with GPU (an 8B LLM in bf16 needs ~16–20 GB VRAM; A100 is fine) + working SSH/VS Code (contact: Pasindu) | M1 W2 | T0.2, WS4–6 | ☐ |
-| M-3 | Segmentation model weights and/or pseudo-masks for ISIC clinical close-ups (Aloys's UNet / DeepLabV3+-ResNet101) | M1 W3 | T1.2 | ☐ |
+| M-1 | Access to `medirai_payload_generation_api`, the payload_generation fine-tuning/segmentation repo, `medirai_malignant_prediction_api` (`dev_chloe`), and GCS `medirai-storage-bucket-medirai-production/payload_generation_models` | M1 W1 | T0.1, T1.3 | ◐ Requested 2026-09-25 |
+| M-2 | GCP VM with GPU (an 8B LLM in bf16 needs ~16–20 GB VRAM; A100 is fine) + working SSH/VS Code (contact: Pasindu) | M1 W2 | T0.2, WS4–6 | ◐ Requested 2026-09-25 |
+| M-3 | Segmentation model weights and/or pseudo-masks for ISIC clinical close-ups (Aloys's UNet / DeepLabV3+-ResNet101) | M1 W3 | T1.2 | ◐ Requested 2026-09-25 |
 | M-4 | Decision on whether proprietary MedirAI clinical images are in scope. If yes: data-use agreement, access path, de-identification confirmation | M1 W2 | T1.5, A-1 | ☐ |
 | M-5 | Explanation spec: target reader (dermatologist vs. GP; prior prompts targeted GPs), length, language (EN/FR?), where it appears in the product | M1 W2 | T4.2, T5.1 | ☐ |
 | M-6 | Clinical reviewer (in-house advisor or contact) to sanity-check the concept map, phrase bank, and definitions | M2 W7 | T3.5 | ☐ |
@@ -307,7 +310,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | Ethics approval or clinician recruitment slips | D6 late | Start A-1 in W1; recruit via M-7 by W8; fallback: pilot with fewer clinicians + stronger automated eval |
 | Upstream delays from S1 (model, uncertainty outputs) | WS2/WS4 blocked | Build against a preliminary S1 checkpoint on the new split. Don't use the NRC ensemble until its P0 items are fixed. Keep interfaces keyed by `isic_id` so the swap is trivial |
 | Legacy accuracy numbers are unreliable (leakage, source confound, broken heads; see CODEBASE_TODO P0) | Wrong baselines in the report; C1 fidelity measured against a bad model | Fix P0 in W2–W3, re-baseline once, and cite only post-fix numbers. Label any legacy number as "pre-fix" |
-| Diameter has no mm calibration; "E" is not observable | Incomplete ABCDE | Pixel Feret diameter with a caveat; state that E is out of scope in every explanation's limitations |
+| Diameter has no mm calibration; "E" is not observable | Incomplete ABCDE | Use `clin_size_long_diam_mm` (1,229 images, mostly UFES) to validate or calibrate a pixel-Feret proxy; elsewhere, pixel diameter with a caveat. State that E is out of scope in every explanation's limitations |
 | Class imbalance for rare one-vs-all classes | Unstable SHAP | Merge rare classes into "other"; class weights; stability check (T2.6) |
 | GPU memory and repo access issues (both happened before) | Lost time | Request access in W1 (M-1, M-2); 8B models only; quantize if needed |
 | Llama license unsuitable for commercial use | Rework | Decide early (M-8); keep Mistral (Apache-2.0) as a drop-in alternative |
@@ -322,7 +325,8 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | 2026-09-25 | Start date of Month 1 | — | **Decided:** Mon 2026-09-21; end Jan 20, 2027 |
 | 2026-09-25 | Codebase layout | S2 | **Decided:** one git repo at the workspace root. Duplicates removed, superseded code in `poc-nrc-main/archive/` |
 | — | Which baseline number is cited going forward | S1+S2 | Open: the ResNet50 re-baseline on the grouped split, after the P0 fixes |
-| — | One-vs-all class set and handling of "indeterminate" | S2 | Open (T2.1) |
+| 2026-09-25 | Handling of "indeterminate" | S2 | **Decided:** Indeterminate and missing `diagnosis_1` are `split=excluded` (1,333 images). They're kept for analysis only |
+| — | One-vs-all class set | S2 | Open (T2.1). Candidates by train count: BCC 2,414, Nevus 707, SK 399, SCC (all subtypes) ~470, Melanoma (all subtypes) ~335, Keratoacanthoma 115 |
 | — | Tree trained on ground truth vs. ResNet50 labels | S2+S1 | Open (T2.5): decide on fidelity |
 | — | Use ResNet50 embeddings as features? | S2+S1 | Open: only if the intermediate concept mapping is reliable (T3.4) |
 | — | Target reader and language of explanations | M | Open (M-5) |

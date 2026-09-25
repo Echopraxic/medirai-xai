@@ -1,7 +1,17 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .bayeslayers import Conv2dReparameterization, ConvTranspose2dReparameterization
+# The module is bayes_layers.py; `.bayeslayers` did not exist, which made models/model.py (and so
+# train.py/test.py) fail to import. ConvTranspose2dReparameterization is also absent from this
+# snapshot, so only the fully-Bayesian UNet's transpose-conv path is unavailable.
+from .bayes_layers import Conv2dReparameterization
+try:
+	from .bayes_layers import ConvTranspose2dReparameterization
+except ImportError:
+	def ConvTranspose2dReparameterization(*args, **kwargs):
+		raise NotImplementedError("ConvTranspose2dReparameterization is missing from models/bayes_layers.py; "
+								  "restore it from the original uncertaintyNet repo to use the Bayesian UNet "
+								  "with interpolate=False.")
 
 
 def initialize_batchNorm(feature_size: int, init_weight:torch.Tensor, init_bias: torch.Tensor, turn_off: bool=True):

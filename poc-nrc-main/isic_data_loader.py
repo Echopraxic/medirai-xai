@@ -25,12 +25,13 @@ class ISICDataset(Dataset):
         traning augmentations to aid in training
     '''
 
-    def __init__(self, df: pd.DataFrame, size : tuple[int, int], transform: Optional[torchvision.transforms.Compose] = None):
+    def __init__(self, df: pd.DataFrame, size : tuple[int, int], transform: Optional[torchvision.transforms.Compose] = None, blur_radius : float = 0):
 
         super().__init__()
         self.data = df.reset_index(drop=True)
         self.size = size
         self.transform=transform
+        self.blur_radius = blur_radius
         self.required_cols = set(['image_path', 'target', 'image_id'])
 
        
@@ -60,9 +61,12 @@ class ISICDataset(Dataset):
 
         img = Image.open(file_path).convert('RGB')
 
-        if 'melanoma' in image_id:
+        # Blur used to be applied only to 'melanoma' (Kaggle, ~all malignant) images, handing the model a
+        # "blurry => malignant" shortcut that inference never sees (CODEBASE_TODO P0-7). If blur is wanted
+        # for domain matching it must be applied to every image, and identically at inference.
+        if self.blur_radius > 0:
             img = self.gauss_blur(img)
-        
+
         if self.transform:
             img = self.transform(img)
 
@@ -84,7 +88,7 @@ class ISICDataset(Dataset):
             image with blur
         '''
 
-        return img.filter(ImageFilter.GaussianBlur(radius = 9))
+        return img.filter(ImageFilter.GaussianBlur(radius = self.blur_radius))
 
 
 class ISICDatasetWMod(Dataset):
@@ -176,7 +180,7 @@ class ISICDatasetWMod(Dataset):
         elif img_mod == 'mir_v':
             img = ImageOps.mirror(img)
         elif img_mod == 'transpose':
-            img = Image.fromarray(np.transpose(np.array(img), (0,1,2)))
+            img = Image.fromarray(np.transpose(np.array(img), (1,0,2)))  # swap H/W; (0,1,2) was a no-op (P1-18)
 
         img_arr = np.array(img)
         img_shape = img_arr.shape
@@ -215,9 +219,10 @@ class ISICDatasetSegmentation(Dataset):
     seg_kwargs : dict
         information pertaining to segmenation.
     '''
-    def __init__(self, df: pd.DataFrame, size : tuple[int, int], transform: Optional[torchvision.transforms.Compose] = None, seg_kwargs : dict):
-    #def __init__(self, df:pd.DataFrame, size : tuple[int, int], transform=None, seg_kwargs=None):
-                         
+    def __init__(self, df: pd.DataFrame, size : tuple[int, int], transform: Optional[torchvision.transforms.Compose] = None, seg_kwargs : Optional[dict] = None):
+
+        if seg_kwargs is None:
+            raise ValueError('ISICDatasetSegmentation requires seg_kwargs with "seg_model", "seg_model_path" and "seg_model_device".')
         super().__init__()
         self.data = df
         self.size = size
@@ -298,27 +303,28 @@ class ISICDatasetSegmentation(Dataset):
 
     def __getitem__(self, idx):
     
-        img = plt.imread(self.data.loc[idx, 'image_path'])/255.0
+        # Same preprocessing the UNet was trained with (RGB / 255, 256x256); see archive/development/segmentation_2.py
+        img = np.asarray(Image.open(self.data.loc[idx, 'image_path']).convert('RGB'), dtype=np.float32) / 255.0
         lbl = self.data.loc[idx, 'target']
 
-        img_size = img.shape
-        img = cv2.resize(img, (256, 256))
-       
+        orig_h, orig_w = img.shape[:2]
+        img_256 = cv2.resize(img, (256, 256))
+
         with torch.no_grad():
-            img_tensor = torch.Tensor(img).unsqueeze(0).permute(0, 3, 1, 2).to('cpu')
-            generated_mask = self.seg_model(img_tensor).squeeze().cpu().numpy()
+            img_tensor = torch.from_numpy(img_256).permute(2, 0, 1).unsqueeze(0).to(self.seg_model_device)
+            # UNet was trained with BCEWithLogitsLoss: threshold sigmoid(logit) at 0.5, as in its own evaluation.
+            # (Previously the raw logits were min-max normalised per image, which always produced a "lesion".)
+            prob_mask = torch.sigmoid(self.seg_model(img_tensor)).squeeze().cpu().numpy()
 
-        generated_mask_resized = cv2.resize(generated_mask, (img.shape[1], img.shape[0]))
-        generated_mask_resized = cv2.GaussianBlur(generated_mask_resized,(11,11),0)
-        generated_mask_resized = (generated_mask_resized-np.min(generated_mask_resized))/(np.max(generated_mask_resized)-np.min(generated_mask_resized))
-        generated_mask_stacked = np.stack((generated_mask_resized,)*3, axis=-1)
-        generated_mask_stacked = (generated_mask_stacked > 0.5).astype(int)
+        prob_mask = cv2.resize(prob_mask, (orig_w, orig_h))  # cv2 takes (width, height)
+        prob_mask = cv2.GaussianBlur(prob_mask, (11, 11), 0)
+        binary_mask = (prob_mask > 0.5).astype(np.float32)
 
-        model_img = img*generated_mask_stacked
-        model_img = cv2.resize(model_img, (img_size[0], img_size[1]))
+        model_img = img * binary_mask[..., None]
+        model_img = Image.fromarray((model_img * 255).astype(np.uint8))
 
         if self.transform:
-            train_img = self.transform(train_img)
+            model_img = self.transform(model_img)
 
         return model_img, lbl
     
@@ -342,10 +348,10 @@ class ISICMixupDataset(Dataset):
         information pertaining to segmenation.
     '''
 
-    #def __init__(self, df: pd.DataFrame, img_size, transform=None):
-    def __init__(self, df: pd.DataFrame, img_size : tuple[int, int], transform: Optional[torchvision.transforms.Compose] = None, seg_kwargs : dict):
+    def __init__(self, df: pd.DataFrame, img_size : tuple[int, int], transform: Optional[torchvision.transforms.Compose] = None, seg_kwargs : Optional[dict] = None, blur_radius : float = 0):
 
         super().__init__()
+        self.blur_radius = blur_radius  # was always 3; inference never blurs, so off by default (P0-7)
         self.img_size = img_size
         self.data = df.reset_index(drop=True)
         self.transform=transform
@@ -378,7 +384,8 @@ class ISICMixupDataset(Dataset):
 
         img = lam*np.array(img_1) + (1-lam)*np.array(img_2)
         img = Image.fromarray(img.astype(np.uint8))
-        img = self.gauss_blur(img)
+        if self.blur_radius > 0:
+            img = self.gauss_blur(img)
         
         if self.transform:
             img = self.transform(img)
@@ -400,7 +407,7 @@ class ISICMixupDataset(Dataset):
         img : Image.Image
             image with blur
         '''
-        return img.filter(ImageFilter.GaussianBlur(radius = 3))
+        return img.filter(ImageFilter.GaussianBlur(radius = self.blur_radius))
 
 
 from torchvision.transforms.functional import pil_to_tensor
@@ -426,9 +433,10 @@ class ISICFeatureFusionMixupDataset(Dataset):
     seg_kwargs : dict
         information pertaining to segmenation.
     '''
-    def __init__(self, df: pd.DataFrame, img_size, img_size_2=None, transform=None, as_tensor=None):
+    def __init__(self, df: pd.DataFrame, img_size, img_size_2=None, transform=None, as_tensor=None, blur_radius : float = 0):
 
         super().__init__()
+        self.blur_radius = blur_radius  # previously always on; off by default to match inference (P0-7)
         self.img_size = img_size
         self.img_size_2 = img_size_2
         self.data = df.reset_index(drop=True)
@@ -454,7 +462,8 @@ class ISICFeatureFusionMixupDataset(Dataset):
 
         img = lam*np.array(img_1) + (1-lam)*np.array(img_2)
         img = Image.fromarray(img.astype(np.uint8))
-        img = self.gauss_blur(img)
+        if self.blur_radius > 0:
+            img = self.gauss_blur(img)
         
         if self.transform:
             img = self.transform(img)
@@ -486,6 +495,6 @@ class ISICFeatureFusionMixupDataset(Dataset):
         img : Image.Image
             image with blur
         '''
-        return img.filter(ImageFilter.GaussianBlur(radius = 3))
+        return img.filter(ImageFilter.GaussianBlur(radius = self.blur_radius))
 
 

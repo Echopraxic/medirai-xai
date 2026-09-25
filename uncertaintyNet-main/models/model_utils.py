@@ -52,6 +52,7 @@ def build_variational_model(
 	lbayes_config: dict,
 	multi_gpu: bool=False,
 	fabric=None,
+	save_init: bool=True,
 ):
 	"""
 	Replace selected layers in a model with Bayesian layers and save checkpoint.
@@ -132,7 +133,7 @@ def build_variational_model(
 		# 'init_network': variational_model
 	}
 
-	if (multi_gpu and fabric.global_rank == 0) or not multi_gpu:
+	if save_init and ((multi_gpu and fabric.global_rank == 0) or not multi_gpu):
 		if not os.path.isdir(output_path):
 			os.makedirs(output_path)
 		torch.save(custom_checkpoint, output_path + f'/init_checkpoint.pth.tar')

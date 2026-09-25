@@ -205,6 +205,7 @@ class MediraiDermFoundation:
             File path to saved pytorch state dictionary
         '''
         self.pred_model.load_state_dict(torch.load(path, weights_only=True))
+        self.pred_model.eval()  # otherwise Dropout(0.5) stays active at inference (CODEBASE_TODO P0-15)
      
     def gen_n_image_features(self,
                              training_csv : str, 
@@ -293,7 +294,8 @@ class MediraiDermFoundation:
         '''
 
         emb = self.gen_embedding_from_path(img)
-        pred = self.pred_model(torch.from_numpy(emb)).detach().numpy()
+        with torch.no_grad():
+            pred = self.pred_model(torch.from_numpy(emb)).numpy()
         return pred
 
  

@@ -212,7 +212,7 @@ class MediraiFeatureFusionEnsemble(nn.Module):
         x = self.get_hidden(x_224, x_299)
         x = self.dropout(x)
         x = self.fc2(x)
-        x = self.relu(x)
+        # no activation on the logits (CODEBASE_TODO P0-14; ReLU6 here clamped them to [0, 6])
         
         return x
     

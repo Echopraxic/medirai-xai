@@ -19,7 +19,7 @@ class ResNet50Hidden(nn.Module):
     
 
 class ResNet18Hidden(nn.Module):
-    def __init__(self, num_classes:int, weights="IMAGENET1K_V2"):
+    def __init__(self, num_classes:int, weights="IMAGENET1K_V1"):  # resnet18 only ships IMAGENET1K_V1
         super().__init__()
         self.model = models.resnet18(weights=weights)
         num_ftrs = self.model.fc.in_features

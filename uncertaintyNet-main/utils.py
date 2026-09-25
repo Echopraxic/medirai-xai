@@ -146,6 +146,7 @@ def expected_calibration_error(target, y_prob, num_bins=10):
 	Returns:
 	ece (float): The Expected Calibration Error.
 	"""
+	target, y_prob = np.asarray(target, dtype=float), np.asarray(y_prob, dtype=float)
 	# Ensure target and y_prob have the same length
 	if len(target) != len(y_prob):
 		raise ValueError("Input arrays must have the same length.")
@@ -162,7 +163,9 @@ def expected_calibration_error(target, y_prob, num_bins=10):
 
 	for bin_start, bin_end in zip(bin_edges[:-1], bin_edges[1:]):
 		# Filter samples falling within the current bin
-		in_bin = (y_prob >= bin_start) & (y_prob < bin_end)
+		# bins are [start, end) except the last, which is [start, 1.0]: previously p == 1.0 fell in no
+		# bin, silently dropping the saturated (most over-confident) predictions (CODEBASE_TODO P0-13)
+		in_bin = (y_prob >= bin_start) & ((y_prob < bin_end) if bin_end < 1.0 else (y_prob <= bin_end))
 
 		# Number of samples in the current bin
 		num_samples_in_bin = np.sum(in_bin)
@@ -178,6 +181,19 @@ def expected_calibration_error(target, y_prob, num_bins=10):
 			ece += (num_samples_in_bin / total_samples) * np.abs(avg_input_prob - avg_true_prob)
 
 	return ece
+
+
+def top_label_calibration_error(probs, target, num_bins=10):
+	"""
+	ECE on the confidence of the predicted class (standard multi-class definition), complementing
+	expected_calibration_error, which calibrates the positive-class probability.
+
+	probs: array [N, C] of class probabilities; target: array [N] of integer labels.
+	"""
+	probs, target = np.asarray(probs, dtype=float), np.asarray(target)
+	confidence = probs.max(axis=1)
+	correct = (probs.argmax(axis=1) == target).astype(float)
+	return expected_calibration_error(correct, confidence, num_bins=num_bins)
 
 
 def calculate_accuracy(output: torch.Tensor, target: torch.Tensor,
@@ -310,10 +326,13 @@ def load_checkpoint(net:nn.Module, init_path: str, cont_run = False, fold=None):
 	checkpoint = torch.load(file, weights_only=False)
 	try:
 		net.load_state_dict(checkpoint['network_state_dict'])
-	except:
-		if 'init_network' in checkpoint.keys():
-			net = checkpoint['init_network']
-			net.load_state_dict(checkpoint['network_state_dict'])
+	except RuntimeError as err:
+		# Previously a bare `except:` swallowed this and evaluation continued with the network's
+		# random/previous weights whenever the checkpoint had no 'init_network' (CODEBASE_TODO P0-11).
+		if 'init_network' not in checkpoint:
+			raise RuntimeError(f"Checkpoint {file} does not match the network architecture: {err}") from err
+		net = checkpoint['init_network']
+		net.load_state_dict(checkpoint['network_state_dict'])
 	epoch_start =0
 	if cont_run:
 		epoch_start = checkpoint['epoch']

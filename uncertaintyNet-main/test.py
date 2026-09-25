@@ -6,6 +6,7 @@ from tqdm import tqdm
 import pandas as pd 
 import dataset
 import models.model as model
+import models.model_utils as mutils
 import utils
 import torch.nn.functional as F
 from sklearn.model_selection import KFold
@@ -31,7 +32,6 @@ else:
 ### LOAD CONFIGS
 net_config = config["Network"]["Basic Setup"]
 data_config = config["Training"]["Dataset"]
-sparse_config = config["Network"]["Optional"]["Sparsity"]
 train_config = config["Training"]["Parameters"]
 bayes_config = config["Training"]["Bayesian Parameters"]
 pbayes_config = config["Training"]["Partial Bayesian Parameters"]
@@ -48,15 +48,26 @@ if net_config["task"] == "regression" and data_config["dataset"].upper() == "TOY
 	plotter = utils.ToyDataPlotter(num_samples=20)
 #######################################################################################################
 ### LOAD DATA
+if opts.noise or opts.corrupt:
+	raise NotImplementedError("--noise/--corrupt are not supported by dataset.get_dataloader yet")
 data_config["dataset"] = opts.dataset if opts.dataset is not None else data_config["dataset"]
 data_loader= dataset.get_dataloader(root=dataset_path, input_size=net_config["input_size"], data_config=data_config,
-									test = True, noise=opts.noise, corruption=opts.corrupt)
+									test = True)
 
 #######################################################################################################
 ### NETWORK INITIALIZATION
-network= model.get_model(net_config)
-checkpoint = torch.load(f"{run_folder}/checkpoint_best_val.pth.tar", weights_only=False)
-network.load_state_dict(checkpoint["network_state_dict"])
+# Rebuild the same architecture train.py trained: a deterministic base, wrapped with variational
+# layers for (partial_)bayesian runs. Weights come from the run's best checkpoint below
+# (utils.load_checkpoint now raises on any state-dict mismatch instead of silently continuing).
+def build_network():
+	base_setup = dict(net_config, network_type="deterministic")
+	net = model.get_model(base_setup)
+	if "bayesian" in net_config["network_type"]:
+		net = mutils.build_variational_model(net, net_config["network_type"], str(run_folder),
+											bayes_config, pbayes_config, lbayes_config, save_init=False)
+	return net
+
+network = build_network()
 network.to(device)
 # if net_config["network_type"] == 'partial_bayesian':
 # 	checkpoint = torch.load(f"{run_folder}/init_checkpoint.pth.tar", weights_only=False)
@@ -249,7 +260,8 @@ if data_config["kfold"] > 1:
 		print(f"Running test for fold {fold}")
 		test_single_fold(net_fold, test_loader, run_folder, fold=fold)
 else:
-	net_fold, _ = utils.load_checkpoint(network, run_folder, cont_run=False)
+	network, _ = utils.load_checkpoint(network, run_folder, cont_run=False)
+	network.to(device)
 	test_single_fold(network, data_loader, run_folder)
 
 df = pd.read_csv(f"{str(run_folder)}/{log_file_name}")

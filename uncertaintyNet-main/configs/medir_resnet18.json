@@ -23,6 +23,7 @@
     "Training": {
         "Dataset":{
             "dataset": "medirv2",
+            "split_file": "",
             "augment": true,
             "num_points": 50000,
             "train_val_split": 0.7,

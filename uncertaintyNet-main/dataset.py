@@ -19,6 +19,7 @@ dataset means and standard deviations computed as follows
 """
 
 import os
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
@@ -26,7 +27,6 @@ import monai
 
 from PIL import Image
 from scipy.ndimage import distance_transform_edt
-from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from torchvision.datasets import ImageFolder
 from torchvision import transforms, datasets
@@ -80,7 +80,7 @@ class ISICDatasetV2(Dataset):
 		self.transform = transform
 		
 		self.isic_ids = dataframe['isic_id'].values
-		self.labels = dataframe['diagnosis_1'].values
+		self.labels = dataframe['label'].astype(int).values
 		
 		self.image_paths = [os.path.join(self.root_dir, f"{isic_id}.jpg") 
 							for isic_id in self.isic_ids]
@@ -163,6 +163,24 @@ class ISICDatasetV1(Dataset):
 		return image, label
 
 
+# Persisted lesion/patient-grouped split shared by every model in the workspace
+# (built by splits/make_isic_clinical_split.py; override with "split_file" in the dataset config).
+DEFAULT_SPLIT_FILE = Path(__file__).resolve().parents[1] / "splits" / "isic_clinical_v1.csv"
+
+
+def load_split(split_file=None, data_dir=None):
+	"""Read the persisted split; optionally check that every train/val/test image exists in data_dir."""
+	split_file = split_file or DEFAULT_SPLIT_FILE
+	df = pd.read_csv(split_file, dtype={"label": "Int64"})
+	df = df[df["split"] != "excluded"].reset_index(drop=True)
+	if data_dir is not None:
+		missing = [i for i in df["isic_id"] if not os.path.exists(os.path.join(data_dir, f"{i}.jpg"))]
+		if missing:
+			raise FileNotFoundError(f"{len(missing)} images listed in {split_file} are missing from {data_dir} "
+									f"(e.g. {missing[:3]}). Re-download the ISIC clinical close-ups.")
+	return df
+
+
 def get_isic_files(root_dir, subset):
 	img_dir = os.path.join(root_dir, subset, "img")
 	seg_dir = os.path.join(root_dir, subset, "seg")
@@ -228,21 +246,11 @@ def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: boo
 	elif dataset.upper() == "MEDIRV2":
 		
 		data_dir = os.path.join(root, "ISIC_clinical")
-		df = pd.read_csv(os.path.join(data_dir, "metadata.csv"))
-		df.replace("", pd.NA, inplace=True)
-		df = df.reset_index(drop=True)
+		# Lesion/patient-grouped, persisted split (Indeterminate/unlabelled images already excluded).
+		# Replaces the old per-run image-level split, which put ~26% of test images in the same
+		# lesion/patient group as a training image (see splits/isic_clinical_v1_report.md).
+		df = load_split(data_config.get("split_file"), data_dir)
 
-		label_map = {"Malignant": 1, "Benign": 0}
-		df['diagnosis_1'] = df['diagnosis_1'].map(label_map)
-		df = df.reset_index(drop=True)
-
-		df = df[['isic_id', 'diagnosis_1']]
-		df.dropna(subset=['diagnosis_1'], inplace=True) 
-
-		# Prepare for stratified splitting
-		X = df.index.values # Indices for the dataframe
-		y = df['diagnosis_1'].values # Labels for stratification
-		
 		normalize = transforms.Normalize(mean=[0.6689, 0.5090, 0.4417],
 										std=[0.1336, 0.1352, 0.1486])
 
@@ -257,32 +265,19 @@ def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: boo
 		])
 
 		test_transform = transforms.Compose([
-			transforms.Resize((224, 224)),
+			transforms.Resize((input_size, input_size)),
 			transforms.ToTensor(),
 			normalize,
 		])
-		
-		if data_config["kfold"] == 1:
 
-			X_train, X_temp, y_train, y_temp = train_test_split(
-				X, y, 
-				test_size=0.3, 
-				random_state=42, 
-				stratify=y
-			)
-			X_val, X_test, y_val, y_test = train_test_split(
-				X_temp, y_temp, 
-				test_size=(2/3), 
-				random_state=42, 
-				stratify=y_temp
-			)
-			
-			# Get the final dataframes using the split indices
-			df_train = df.loc[X_train].reset_index(drop=True)
-			df_val = df.loc[X_val].reset_index(drop=True)
-			df_test = df.loc[X_test].reset_index(drop=True)
+		if data_config["kfold"] != 1:
+			raise NotImplementedError("MEDIRV2 uses the persisted split file; k-fold is not supported (set kfold=1).")
+		else:
+			df_train = df[df["split"] == "train"].reset_index(drop=True)
+			df_val = df[df["split"] == "val"].reset_index(drop=True)
+			df_test = df[df["split"] == "test"].reset_index(drop=True)
 
-			if test: 
+			if test:
 				test_data = ISICDatasetV2(df_test, data_dir, transform=test_transform)
 			else:
 				train_data = ISICDatasetV2(df_train, data_dir, transform=train_transform)

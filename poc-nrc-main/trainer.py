@@ -252,23 +252,40 @@ class Trainer:
         train_log_df.to_csv(f'./logs/train_{self.model_name}_at_{self.train_datetime.strftime("%Y%m%d-%H%M%S")}.csv', index=False)
 
 
-    def fit(self, 
-            eval_per_epoch: int=1, 
+    def fit(self,
+            eval_per_epoch: int=1,
             gradient_accumulation: int=1):
         '''
-        Do the full training loop
+        Do the full training loop.
+
+        Folds are formed over *source images*, not CSV rows (CODEBASE_TODO P0-4/P0-5):
+        mixup rows and 'artificially_inflated' rows reuse the same image many times, so a
+        row-level split put the same image in train and val. Each fold also restarts from
+        the initial weights/optimizer/scheduler state; previously one model kept training
+        across folds, so fold k validated on images it had trained on in earlier folds.
+        Validation always uses the real (un-mixed, un-modified) held-out images.
         '''
-        
+        init_model = copy.deepcopy(self.model.state_dict())
+        init_optimizer = copy.deepcopy(self.optimizer.state_dict())
+        init_scheduler = copy.deepcopy(self.scheduler.state_dict()) if self.scheduler else None
+
+        images = source_images(self.train_df)
         skf = StratifiedKFold(
-                n_splits=self.CONFIG['n_fold'], 
-                shuffle=True, 
+                n_splits=self.CONFIG['n_fold'],
+                shuffle=True,
                 random_state=self.CONFIG['seed'])
 
-        for fold, (train_idx, val_idx) in enumerate(skf.split(self.train_df, self.train_df['target'])):
+        for fold, (_, val_idx) in enumerate(skf.split(images, images['target'])):
             print(f"================Fold {fold + 1}/{self.CONFIG['n_fold']}===============")
 
-            train = self.train_df.iloc[train_idx].reset_index(drop=True)
-            val = self.train_df.iloc[val_idx].reset_index(drop=True)
+            self.model.load_state_dict(init_model)
+            self.optimizer.load_state_dict(init_optimizer)
+            if self.scheduler:
+                self.scheduler.load_state_dict(init_scheduler)
+            fold_best = {'wts': None, 'acc': 0.0}
+
+            val = images.iloc[val_idx].reset_index(drop=True)
+            train = rows_without_images(self.train_df, set(val['image_id']))
 
             class_weight = compute_class_weight(
                                 'balanced',
@@ -279,8 +296,12 @@ class Trainer:
             self.criterion = nn.CrossEntropyLoss(weight=class_weight)
 
             transform = self.data_transforms()
-            trainDataset = self.get_data_loader(train, (self.CONFIG['image_size'], self.CONFIG['image_size']),  transform['train'])
-            valDataset = self.get_data_loader(val, (self.CONFIG['image_size'], self.CONFIG['image_size']), transform['val'])
+            size = (self.CONFIG['image_size'], self.CONFIG['image_size'])
+            trainDataset = self.get_data_loader(train, size, transform['train'])
+            if self.data_loader_name == 'segmentation':
+                valDataset = self.get_data_loader(val, size, transform['val'])
+            else:
+                valDataset = ISICDataset(val, size, transform=transform['val'])
 
             train_loader = DataLoader(
                 trainDataset,
@@ -311,13 +332,44 @@ class Trainer:
                     self.history['val_loss'].append(loss.cpu().item())
                     self.history['val_acc'].append(acc.cpu().item())
                     self.update_best_model(acc)
+                    if acc > fold_best['acc']:
+                        fold_best = {'wts': copy.deepcopy(self.model.state_dict()), 'acc': acc}
                     print(f'Validation Loss: {loss:.4f}, Validation Accuracy: {acc:.4f}')
-    
+
                 if self.scheduler:
                     self.scheduler.step(loss)
 
-            self.save_model_state_dict(self.CONFIG['freeze_name_template'].replace('XYYX',f'{str(fold+1)}'))
+            # best epoch of this fold (was: last epoch)
+            torch.save(fold_best['wts'], self.CONFIG['freeze_name_template'].replace('XYYX', f'{str(fold+1)}'))
 
+        # 'best' = best fold's best epoch. Folds are now independent, but picking the max over folds
+        # is still optimistic; report the per-fold validation accuracies, not this maximum.
         self.save_best_model()
         self.save_training_log()
+
+
+def _image_columns(df: pd.DataFrame) -> list[tuple[str, str]]:
+    '''(image_id column, image_path column) pairs used by a training CSV.'''
+    if 'image_id_1' in df.columns:  # mixup CSVs
+        return [('image_id_1', 'image_path_1'), ('image_id_2', 'image_path_2')]
+    return [('image_id', 'image_path')]
+
+
+def source_images(train_df: pd.DataFrame) -> pd.DataFrame:
+    '''
+    One row per distinct source image (image_id, image_path, target) in a training CSV,
+    whether it is a plain, 'artificially_inflated' (repeated ids) or mixup (paired ids) CSV.
+    '''
+    parts = [train_df[[id_col, path_col, 'target']].set_axis(['image_id', 'image_path', 'target'], axis=1)
+             for id_col, path_col in _image_columns(train_df)]
+    images = pd.concat(parts).drop_duplicates('image_id').sort_values('image_id')
+    return images.reset_index(drop=True)
+
+
+def rows_without_images(train_df: pd.DataFrame, image_ids: set) -> pd.DataFrame:
+    '''Training rows that use none of the given source images.'''
+    keep = np.ones(len(train_df), dtype=bool)
+    for id_col, _ in _image_columns(train_df):
+        keep &= ~train_df[id_col].isin(image_ids).to_numpy()
+    return train_df[keep].reset_index(drop=True)
 

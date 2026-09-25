@@ -229,6 +229,7 @@ class MediraiBiomedClip:
         '''
         
         self.pred_model.load_state_dict(torch.load(path, weights_only=True))
+        self.pred_model.eval()  # otherwise Dropout(0.5) stays active at inference (CODEBASE_TODO P0-15)
         
 
     def predict(self, img : str) -> npt.NDArray:
@@ -247,7 +248,8 @@ class MediraiBiomedClip:
         '''
 
         _, img_feats = self.get_img_features(img)
-        preds = self.pred_model(img_feats)
+        with torch.no_grad():
+            preds = self.pred_model(img_feats)
         #probs = preds.softmax()
 
         return preds 

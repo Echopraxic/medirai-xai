@@ -7,7 +7,8 @@ from torchvision import transforms, models
 from torch.utils.data import TensorDataset, DataLoader
 
 #from medirai_base_model import MediraiEnsembleModelV1
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
+import numpy as np
 from tqdm import tqdm
 
 
@@ -134,6 +135,7 @@ class PredictorNet(nn.Module):
                  dropout_prob : float = 0.5):
         
         super(PredictorNet, self).__init__()
+        # Legacy, unused in forward(); kept only so existing checkpoints still load with strict=True.
         self.classifier = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.ReLU6(),
@@ -189,7 +191,8 @@ class PredictorNet(nn.Module):
         x = self.get_hidden(feat_rep)
         x = self.dropout(x)
         x = self.fc2(x)
-        x = self.relu(x)
+        # No activation on the logits (CODEBASE_TODO P0-14): a ReLU6 here clamped logits to [0, 6], so
+        # whenever both were <= 0 the output tied and argmax always returned class 0.
 
         return x
     
@@ -229,9 +232,19 @@ class PredictorNetTrainer():
         val_split : float = 0.1,
         lr : float = 1e-4,
         weight_decay : float = 5e-5,
+        batch_size : int = 64,
+        groups : npt.NDArray | None = None,
+        seed : int = 42,
         ):
-
+        '''
+        groups : optional source-image id per row. Pass it whenever feat_reps contains several
+            augmented copies of the same image (e.g. the DermFoundation 7x augmentation), so that
+            copies never end up on both sides of the train/val split.
+        '''
         self.model = model
+        self.batch_size = batch_size
+        self.groups = groups
+        self.seed = seed
         self.feat_reps = feat_reps
         self.labels = labels
         self.save_name = save_name
@@ -254,18 +267,26 @@ class PredictorNetTrainer():
             pytorch DataLoader for validation
 
         '''
-        X_train, X_val, y_train, y_val = train_test_split(
-                    self.feat_reps,
-                    self.labels,
-                    test_size = self.val_split,
-                    random_state=42
-        )
+        if self.groups is not None:
+            gss = GroupShuffleSplit(n_splits=1, test_size=self.val_split, random_state=self.seed)
+            tr, va = next(gss.split(self.feat_reps, self.labels, self.groups))
+            X_train, X_val, y_train, y_val = self.feat_reps[tr], self.feat_reps[va], self.labels[tr], self.labels[va]
+        else:
+            X_train, X_val, y_train, y_val = train_test_split(
+                        self.feat_reps,
+                        self.labels,
+                        test_size = self.val_split,
+                        random_state=self.seed,
+                        stratify=self.labels,
+            )
         
         train_dataset = TensorDataset(torch.Tensor(X_train), torch.Tensor(y_train))
         val_dataset = TensorDataset(torch.Tensor(X_val), torch.Tensor(y_val))
         
-        train_loader = DataLoader(train_dataset)
-        val_loader = DataLoader(val_dataset)
+        # was DataLoader(dataset): batch size 1 and no shuffling, i.e. samples in CSV (class-sorted) order (P0-16)
+        generator = torch.Generator().manual_seed(self.seed)
+        train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, generator=generator)
+        val_loader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False)
 
         return train_loader, val_loader
 
@@ -287,13 +308,14 @@ class PredictorNetTrainer():
         
         train_loader, val_loader = self._init_data()
         
+        best_val_acc = -1.0
         for epoch in range(self.num_epochs):
             print(f'epoch {epoch+1}/{self.num_epochs}')
 
+            self.model.train()
             correct = 0
             total = 0
             for i, (feat_rep, labels) in enumerate(tqdm(train_loader)):
-                #print(images.shape, label.shape)
                 optimizer.zero_grad()
                 outputs = self.model(feat_rep)
                 loss = criterion(outputs, labels.long())
@@ -307,20 +329,27 @@ class PredictorNetTrainer():
 
             accuracy = 100 * correct / total
             print(f'Train accuracy epoch {epoch+1}: {accuracy.detach().numpy():.4f}')
-            
-                        
+
+            # validation in eval mode (dropout off) and without gradients (P0-16)
+            self.model.eval()
             correct = 0
             total = 0
-            for images, labels in tqdm(val_loader):
+            with torch.no_grad():
+                for feat_rep, labels in val_loader:
+                    outputs = self.model(feat_rep)
+                    _, predicted = torch.max(outputs, 1)
+                    total = total + labels.size(0)
+                    correct = correct + (predicted == labels).sum()
 
-                outputs = self.model(images)
-                _, predicted = torch.max(outputs.data, 1)
-                total = total + labels.size(0)
-                correct = correct + (predicted == labels).sum()
+            val_accuracy = float(100 * correct / total)
+            print(f'Val accuracy epoch {epoch+1}: {val_accuracy:.4f}')
 
-            accuracy = 100 * correct / total
-            print(f'Val accuracy epoch {epoch+1}: {accuracy.detach().numpy():.4f}')
-            
             torch.save(self.model.state_dict(), f'{self.save_name}_epoch-{epoch}.plk')
+            if val_accuracy > best_val_acc:
+                best_val_acc = val_accuracy
+                torch.save(self.model.state_dict(), f'{self.save_name}_best.plk')
+                print(f'	new best val accuracy; saved {self.save_name}_best.plk')
+
+        self.model.eval()
 
             
