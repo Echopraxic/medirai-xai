@@ -432,7 +432,7 @@ if __name__ == '__main__':
     print(f'Performing Tests...')
     from sklearn.metrics import confusion_matrix
 
-    test_df = pd.read_csv('./ensemble_v1/test_EQ.csv')
+    test_df = pd.read_csv('./train_test_csvs/test_EQ.csv')
     img_paths = test_df['image_path']
     corrected_paths = [p.replace('../../../', '../../') for p in img_paths]
     test_df['image_path'] = corrected_paths

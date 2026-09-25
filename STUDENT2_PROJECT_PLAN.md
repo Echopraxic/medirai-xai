@@ -2,7 +2,11 @@
 
 **Project:** Explainable AI for Enhancing Deep Learning-Enabled Skin Cancer Detection (Mitacs Accelerate, IT 38322)
 **Student 2:** Michael McKenna · **Student 1:** Shatha Albeetar · **Supervisor:** Prof. Adel Abusitta (Polytechnique Montréal) · **Partner:** MedirAI (J.-F. Djoufak)
-**Duration:** 4 months. Month 1 is already underway; the exact start date is TBD, so all dates are relative (Month 1 = weeks 1–4, … Month 4 = weeks 13–16).
+**Duration:** 4 months, **Mon 2026-09-21 → Wed 2027-01-20**.
+- Month 1 = W1–4 (Sep 21 – Oct 18)
+- Month 2 = W5–8 (Oct 19 – Nov 15)
+- Month 3 = W9–12 (Nov 16 – Dec 13)
+- Month 4 = W13–17 (Dec 14 – Jan 20). It includes the Polytechnique holiday closure (~Dec 23 – Jan 5), so plan roughly three working weeks.
 **Last updated:** 2026-09-25
 
 Legend for owners: **S2** = Student 2 (me) · **S1** = Student 1 · **M** = MedirAI · **A** = Academic supervisor / admin. Dependency IDs (S1-x, M-x, A-x) are defined in §6.
@@ -94,14 +98,15 @@ Aligned with the grant Gantt (§2.3). ★ marks a shared milestone.
 
 | Week | Student 2 focus | Needs from others | Gives to others |
 |---|---|---|---|
-| **M1 · W1–2** | Onboarding, access, read prior code; define scope and success criteria; ethics query started | M-1, M-2, M-4, M-5, M-8, A-1, S1-1 | — |
-| **M1 · W3–4** | Shared feature extraction v0; class definition for one-vs-all; concept dictionary draft; LLM shortlist + serving set up | M-3, S1-2 | Feature schema → S1 |
-| **M2 · W5–6** | Feature table v1; one-vs-all models + TreeSHAP; concept grouping + top-3 selector; input JSON schema | S1-3 (preliminary) | Feature table v1 → S1 |
-| **M2 · W7–8** | Concept validation vs ENHANCE/PH2/Derm7pt; surrogate fidelity; prompt strategies v1; clinician study protocol + form drafted | S1-3, S1-4, S1-5, M-6, M-7 | ★ **End M2:** baselines + attribution outputs available to both streams |
-| **M3 · W9–10** | Prompt strategy comparison (deterministic); verifier; LLM-as-judge calibrated; case set for clinician review frozen | S1-6, S1-7, S1-9, A-1 cleared | Explanations for deferred cases → S1 |
-| **M3 · W11–12** | Integrated prototype; clinician review sessions run; automated evaluation on full test set | S1-8, M-7, M-10 | ★ **End M3:** integrated prototype functional |
-| **M4 · W13–14** | Analysis: auto metrics + clinician results; baseline comparisons (label-only, Grad-CAM, template); error analysis on wrong/deferred cases | S1-8 (final model) | Results → joint report |
-| **M4 · W15–16** | Finalize module, docs, handoff; joint report; final Mitacs report | M-10 | ★ **End M4:** clinician review done, joint report, code/docs delivered |
+| **M1 · W1–2** (Sep 21 – Oct 4) | ☑ Docs/code review, plan, codebase unification + `CODEBASE_TODO.md` (local). Access; scope and success criteria; ethics query started; **P0 fixes with S1: grouped + persisted split, NRC import fix** | M-1, M-2, M-4, M-5, M-8, A-1, S1-1 | Split fix (P0-1/2) co-developed with S1 |
+| **M1 · W3–4** (Oct 5 – 18) | S1 re-baseline on the new split (P0 done). Shared feature extraction v0; one-vs-all class definition; concept dictionary draft; LLM shortlist + serving set up | M-3, S1-2 | Feature schema → S1 |
+| **M2 · W5–6** (Oct 19 – Nov 1) | Feature table v1; one-vs-all models + TreeSHAP; concept grouping + top-3 selector; input JSON schema | S1-3 (preliminary) | Feature table v1 → S1 |
+| **M2 · W7–8** (Nov 2 – 15) | Concept validation vs ENHANCE/PH2/Derm7pt; surrogate fidelity; prompt strategies v1; clinician study protocol + form drafted | S1-3, S1-4, S1-5, M-6, M-7 | ★ **End M2 (Nov 15):** baselines + attribution outputs available to both streams |
+| **M3 · W9–10** (Nov 16 – 29) | Prompt strategy comparison (deterministic); verifier; LLM-as-judge calibrated; case set for clinician review frozen | S1-6, S1-7, S1-9, A-1 cleared | Explanations for deferred cases → S1 |
+| **M3 · W11–12** (Nov 30 – Dec 13) | Integrated prototype; clinician review sessions run; automated evaluation on full test set | S1-8, M-7, M-10 | ★ **End M3 (Dec 13):** integrated prototype functional |
+| **M4 · W13–14** (Dec 14 – 22) | Analysis: auto metrics + clinician results; baseline comparisons (label-only, Grad-CAM, template); error analysis on wrong/deferred cases | S1-8 (final model) | Results → joint report |
+| *Holiday closure* (~Dec 23 – Jan 5) | Buffer only; plan no deliverables | — | — |
+| **M4 · W16–17** (Jan 6 – 20) | Finalize module, docs, handoff; joint report; final Mitacs report | M-10 | ★ **End M4 (Jan 20):** clinician review done, joint report, code/docs delivered |
 
 > **Note on the grant Gantt:** the Student 2 table repeats "Design top-feature selection method and map features to dermatological concepts" in Month 4. This looks like a copy error. This plan treats Month 4 as analysis, integration, and documentation. Confirm with Prof. Abusitta (see A-2).
 
@@ -119,6 +124,13 @@ Status: ☐ not started · ◐ in progress · ☑ done
 - ☐ **T0.4** Agree on the success criteria (§1) and the check-in cadence with the supervisor, S1, and MedirAI (→ M-9).
 - ☐ **T0.5** Kick off the ethics question with the supervisor (→ A-1). Clinician review in M3 is on the critical path.
 - ☐ **T0.6** Get S1's split file (→ S1-1). Inspect the ISIC clinical close-up metadata to see which diagnosis levels exist (`diagnosis_1` benign/malignant/indeterminate; finer levels for one-vs-all).
+- ☑ **T0.7** Codebase unification (2026-09-25): removed the duplicate repo and duplicate CSVs, archived superseded code, put the workspace under git, wrote `CODEBASE_TODO.md` (local).
+- ☐ **T0.8** Stabilize the foundation with S1 before building on it (W2–W3). Items from `CODEBASE_TODO.md` (local):
+  - **P0-1/2/3:** grouped + persisted split. This *is* S1-1, co-owned.
+  - **P0-9:** NRC import fix. It blocks Grad-CAM.
+  - **P0-10/11:** `test.py` and checkpoint loading.
+  - Then S1 re-baselines ResNet50 on the new split, and that one number is what both streams cite.
+  - S2-relevant P1 items: P1-15 (uniform logits export), P1-16 (Grad-CAM on the predicted class), P1-17 and P1-10 (mask quality and Dice).
 
 ### WS1: Shared feature layer (co-owned with S1) (M1 W3 → M2 W6)
 
@@ -241,7 +253,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
 
 | ID | What I need | Needed by | Blocks | Status |
 |---|---|---|---|---|
-| S1-1 | Final train/val/test split file for ISIC clinical close-ups (70/10/20, keyed by `isic_id`, all diagnosis levels) | M1 W2 | T0.6, T1.5, T2.2 | ☐ |
+| S1-1 | Final train/val/test split file for ISIC clinical close-ups (70/10/20, **grouped by lesion/patient**, keyed by `isic_id`, all diagnosis levels). Produced by CODEBASE_TODO P0-1/P0-2 (co-owned) | M1 W2 (Oct 4) | T0.6, T0.8, T1.5, T2.2 | ☐ |
 | S1-2 | Co-design of the feature schema and extraction code; agreement on mask source and quality rules | M1 W3–4 | WS1 | ☐ |
 | S1-3 | ResNet50 checkpoint + per-image predictions/probabilities on val/test (CSV by `isic_id`). A preliminary version is fine at first; final at the End-M2 milestone | M2 W5 (prelim), W8 (final) | T2.5, T4.2 | ☐ |
 | S1-4 | Per-image uncertainty outputs: entropy-of-expected, expected entropy, variational variance, multi-model agreement/deferral flag, and which models disagreed | M2 W8 | T4.2, T6.5 | ☐ |
@@ -293,7 +305,8 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | Dermoscopic validation sets vs. clinical close-up target | Validation doesn't transfer | Report the domain shift; validate on SLICE-3D/PAD-UFES clinical metadata where possible |
 | LLM invents features or overstates confidence (confirmation bias seen in prior XAI work) | Unsafe output | Structured output + verifier (T6.1); tests on wrong/deferred cases (T5.4); template fallback |
 | Ethics approval or clinician recruitment slips | D6 late | Start A-1 in W1; recruit via M-7 by W8; fallback: pilot with fewer clinicians + stronger automated eval |
-| Upstream delays from S1 (model, uncertainty outputs) | WS2/WS4 blocked | Build against the NRC ResNet (`poc-nrc-main`) or a preliminary S1 checkpoint; keep interfaces keyed by `isic_id` so the swap is trivial |
+| Upstream delays from S1 (model, uncertainty outputs) | WS2/WS4 blocked | Build against a preliminary S1 checkpoint on the new split. Don't use the NRC ensemble until its P0 items are fixed. Keep interfaces keyed by `isic_id` so the swap is trivial |
+| Legacy accuracy numbers are unreliable (leakage, source confound, broken heads; see CODEBASE_TODO P0) | Wrong baselines in the report; C1 fidelity measured against a bad model | Fix P0 in W2–W3, re-baseline once, and cite only post-fix numbers. Label any legacy number as "pre-fix" |
 | Diameter has no mm calibration; "E" is not observable | Incomplete ABCDE | Pixel Feret diameter with a caveat; state that E is out of scope in every explanation's limitations |
 | Class imbalance for rare one-vs-all classes | Unstable SHAP | Merge rare classes into "other"; class weights; stability check (T2.6) |
 | GPU memory and repo access issues (both happened before) | Lost time | Request access in W1 (M-1, M-2); 8B models only; quantize if needed |
@@ -306,7 +319,9 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | Date | Question / decision | Owner | Outcome |
 |---|---|---|---|
 | 2026-09-25 | Feature layer ownership | S1+S2 | **Decided:** shared/co-owned. S1 trains the binary tree; S2 trains one-vs-all |
-| — | Exact start date of Month 1 | A | Open: fill in so relative weeks can be dated |
+| 2026-09-25 | Start date of Month 1 | — | **Decided:** Mon 2026-09-21; end Jan 20, 2027 |
+| 2026-09-25 | Codebase layout | S2 | **Decided:** one git repo at the workspace root. Duplicates removed, superseded code in `poc-nrc-main/archive/` |
+| — | Which baseline number is cited going forward | S1+S2 | Open: the ResNet50 re-baseline on the grouped split, after the P0 fixes |
 | — | One-vs-all class set and handling of "indeterminate" | S2 | Open (T2.1) |
 | — | Tree trained on ground truth vs. ResNet50 labels | S2+S1 | Open (T2.5): decide on fidelity |
 | — | Use ResNet50 embeddings as features? | S2+S1 | Open: only if the intermediate concept mapping is reliable (T3.4) |
