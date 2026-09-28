@@ -163,7 +163,9 @@ class MediraiAbstractModel:
             seg_kwargs=seg_kwargs
         )
 
-        trainer.fit()
+        # P1-22: every NRC config sets 'grad_acc' but fit() defaulted gradient_accumulation to 1,
+        # so the configured value was silently ignored.
+        trainer.fit(gradient_accumulation=self.CONFIG['grad_acc'])
 
     def read_image(self, img: str | npt.NDArray) -> Image.Image:
         '''
@@ -229,15 +231,18 @@ class MediraiAbstractModel:
             Binary classification scores as logits and probabilites.
        
         '''
-        def softmax(x): 
+        def softmax(x):
             e_x = np.exp(x - np.max(x))
-            return e_x / e_x.sum(axis=0) 
-        
+            return e_x / e_x.sum(axis=0)
+
         self.model.to(device)
         img_to_pred = self.process_image(input)
-        img_to_pred = img_to_pred.to(self.CONFIG['device'])
-        #scores = self.model(img_to_pred).detach().numpy()[0]
-        scores = self.model(img_to_pred).detach().cpu().numpy()[0]
+        # P1-19: the model was moved to `device` but the tensor was moved to
+        # `self.CONFIG['device']` -- a RuntimeError whenever a caller passes a different device
+        # than the model was configured with. Also wrap in no_grad(): this is inference-only.
+        img_to_pred = img_to_pred.to(device)
+        with torch.no_grad():
+            scores = self.model(img_to_pred).detach().cpu().numpy()[0]
 
         return scores, softmax(scores)
     
@@ -248,9 +253,9 @@ class MediraiAbstractModel:
                 param.requires_grad = False
 
     
-    def generate_cam(self, img: str | npt.NDArray, 
-                     target_class: int, 
-                     target_layer: list[str], 
+    def generate_cam(self, img: str | npt.NDArray,
+                     target_layer: list[str],
+                     target_class: int | None = None,
                      save_name: str = './gradcam_explainer.png'):
         '''
         Produce the images for GradCAM explainability.
@@ -259,17 +264,25 @@ class MediraiAbstractModel:
         --------
         img : str | npt.NDArray
             Image to apply GradCAM explainability on.
-        target_class : int
-            GradCAM required a priori knowledge of the class of the image in question.
         target_layer : int
             Layer of the network we want to extract GradCAM from.
+        target_class : int | None
+            Class to generate the CAM for. Defaults to the model's own predicted class
+            (P1-16: explanations shown to clinicians must justify the prediction, not
+            silently be steered toward a ground-truth label that may disagree with it).
+            Pass an explicit value to override, e.g. for research/debugging.
         '''
 
         if self.mode != 'train': #gradcam requires unlocked model gradients
-            self.unlock_grads() 
+            self.unlock_grads()
+
+        if target_class is None:
+            _, probs = self.predict(img, self.CONFIG['device'])
+            target_class = int(np.argmax(probs))
 
         input_tensor = self.process_image(img)#preprocess_image(img)
-        raw_img = Image.open(img).convert('RGB')
+        # P1-16: img can be a path or an ndarray; read_image() handles both, Image.open() doesn't.
+        raw_img = self.read_image(img)
         raw_img = raw_img.resize((self.CONFIG['image_size'], self.CONFIG['image_size']))
         raw_img = np.array(raw_img)
 
@@ -467,9 +480,18 @@ class MediraiAbstractModel:
 
 
     def unlock_n_trailing_grads(self, n=3):
-        
+        '''
+        Unlock the trailing n layers of a model.
+
+        Paramters:
+        ----------
+        n : int
+            number of trailing n layers of the model.
+        '''
         params = [param for param in self.model.parameters()]
-        for param in params[:-n]:
+        # P1-13: this unlocked params[:-n] (everything *except* the last n), the inverse of
+        # "trailing"; the last n parameters are the trailing ones and mirror unlock_n_leading_grads.
+        for param in params[-n:]:
             param.requires_grad = True
 
         self.mode = 'train'

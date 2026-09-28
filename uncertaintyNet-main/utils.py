@@ -74,24 +74,29 @@ def calculate_iou(input: torch.Tensor, target: torch.Tensor, num_classes: int, d
 	return mean_iou
 
 
-def calculate_dice(input: torch.Tensor, target: torch.Tensor, num_classes: int, epsilon=1e-5):
+def calculate_dice(input: torch.Tensor, target: torch.Tensor, num_classes: int=None, epsilon=1e-5):
 	"""
 	Compute the Dice coefficient for multi-class segmentation.
 
 	Args:
 		input (torch.Tensor): Predicted tensor with shape (batch_size, num_classes, height, width).
 		target (torch.Tensor): Ground truth tensor with shape (batch_size, num_classes, height, width).
-		num_classes (int): Number of classes.
+		num_classes (int): Unused; kept for call-site compatibility.
 		epsilon (float): Smoothing term to avoid division by zero.
 
 	Returns:
-		float: Mean Dice coefficient value across all classes.
+		torch.Tensor: Mean Dice coefficient (scalar tensor, differentiable) across the batch.
 	"""
 	targets_ = target.expand_as(input)
-	intersection = input * targets_ 
-	union = input + targets_
-	dice = (2.0 * intersection + epsilon) / (union + epsilon)
-	return dice.mean().item()
+	# Sum intersection/union per sample over channels+spatial dims and only then take the ratio
+	# (P1-10): the previous version averaged a per-pixel ratio, 2|A∩B|/(|A|+|B|) computed
+	# independently at every pixel, which is a different and biased quantity from the real
+	# Dice score. Also dropped .item() so this stays differentiable for DiceLoss.
+	dims = tuple(range(1, input.dim()))
+	intersection = (input * targets_).sum(dim=dims)
+	total = input.sum(dim=dims) + targets_.sum(dim=dims)
+	dice = (2.0 * intersection + epsilon) / (total + epsilon)
+	return dice.mean()
 
 def compute_brier_score(logits: torch.Tensor, targets: torch.Tensor, 
 						nll_loss: bool=False, one_hot_targets: bool=False,
@@ -206,8 +211,8 @@ def calculate_accuracy(output: torch.Tensor, target: torch.Tensor,
 			pred_binary = torch.mode(pred_binary, dim=0).values
 		accuracy = (pred_binary == target).float().mean()
 	else: 
-		if nll_loss: 
-			probs = torch.exp(output, dim=-1)
+		if nll_loss:
+			probs = torch.exp(output)
 		else:
 			probs = F.softmax(output, dim=-1)
 
@@ -248,8 +253,8 @@ def expected_entropy(probs, epsilon=1e-10, class_dim=-1):
 
 def predictive_entropy(logits, nll_loss=False, task='', multi_label=False):
 	if task != 'segmentation':
-		if nll_loss: 
-			probs = torch.exp(logits, dim=-1)
+		if nll_loss:
+			probs = torch.exp(logits)
 		else:
 			if multi_label: 
 				probs = F.sigmoid(logits)
@@ -445,16 +450,16 @@ def get_logging_keys(net, task, run_val=False, test=False, dataset=''):
 			"segmentation2": ["IoU"],
 		},
 		"bayesian": {
-			"regression": ["KL", "RMSE", "Std"],
-			"classification": ["KL", "Accuracy", "Brier Score"],
-			"segmentation": ["KL", "Dice", "Brier Score"],
-			"segmentation2": ["KL", "IoU", "Brier Score"],
+			"regression": ["KL", "RMSE", "Std", "Sigma", "KL/NLL Ratio"],
+			"classification": ["KL", "Accuracy", "Brier Score", "Sigma", "KL/NLL Ratio"],
+			"segmentation": ["KL", "Dice", "Brier Score", "Sigma", "KL/NLL Ratio"],
+			"segmentation2": ["KL", "IoU", "Brier Score", "Sigma", "KL/NLL Ratio"],
 		},
 		"partial_bayesian": {
-			"regression": ["KL", "RMSE", "Std"],
-			"classification": ["KL", "Accuracy", "Brier Score"],
-			"segmentation": ["KL", "Dice", "Brier Score"],
-			"segmentation2": ["KL", "IoU", "Brier Score"],
+			"regression": ["KL", "RMSE", "Std", "Sigma", "KL/NLL Ratio"],
+			"classification": ["KL", "Accuracy", "Brier Score", "Sigma", "KL/NLL Ratio"],
+			"segmentation": ["KL", "Dice", "Brier Score", "Sigma", "KL/NLL Ratio"],
+			"segmentation2": ["KL", "IoU", "Brier Score", "Sigma", "KL/NLL Ratio"],
 		}
 	}
 
@@ -492,13 +497,13 @@ def get_logging_keys(net, task, run_val=False, test=False, dataset=''):
 			logging_keys = ["Y", "Y_pred"] + test_keys
 		elif task == "classification":
 			if "CHESTMNIST" in dataset.upper():
-				logging_keys = ["Y_conf"] + test_keys + ["Test Entropy", "TP", "TN", "FP", "FN", "Test Brier Score"]
+				logging_keys = ["Y_pred_conf", "Y_true_conf"] + test_keys + ["Test Entropy", "TP", "TN", "FP", "FN", "Test Brier Score"]
 			elif "CIFAR100" in dataset.upper() or "IMAGENET" in dataset.upper():
-				logging_keys = ["Y", "Y_pred", "Y_conf"] + test_keys + ["Test Entropy", "Test Brier Score", "Top5 Accuracy"]
+				logging_keys = ["Y", "Y_pred", "Y_pred_conf", "Y_true_conf"] + test_keys + ["Test Entropy", "Test Brier Score", "Top5 Accuracy"]
 			elif dataset.upper() == "HALFMOON":
-				logging_keys = ["X1", "X2", "Y", "Y_pred", "Y_conf"] + test_keys + ["Test Entropy", "Test Brier Score"]
+				logging_keys = ["X1", "X2", "Y", "Y_pred", "Y_pred_conf", "Y_true_conf"] + test_keys + ["Test Entropy", "Test Brier Score"]
 			else:
-				logging_keys = ["Y", "Y_pred", "Y_conf"] + test_keys + ["Test Entropy", "Test Brier Score"]
+				logging_keys = ["Y", "Y_pred", "Y_pred_conf", "Y_true_conf"] + test_keys + ["Test Entropy", "Test Brier Score"]
 	elif test and "segmentation" in task:
 		test_keys.append("Test NLL")
 		test_keys.append("Test Expected Entropy")

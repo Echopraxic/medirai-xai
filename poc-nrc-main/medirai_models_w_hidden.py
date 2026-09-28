@@ -61,11 +61,11 @@ class MediraiDensenetHiddenModel(MAM):
         return model_ft
     
 
-    def predict_with_cam(self, src, label, save_name='./gradcam_explainer.png'):
+    def predict_with_cam(self, src, target_class=None, save_name='./gradcam_explainer.png'):
 
         target_layer = [self.model.features[-1]]
-        grad_img = self.generate_cam(src, label, target_layer, save_name)
-        return grad_img  
+        grad_img = self.generate_cam(src, target_layer, target_class=target_class, save_name=save_name)
+        return grad_img
 
 
 class MediraiEfficientNetHiddenModel(MAM):
@@ -122,13 +122,13 @@ class MediraiEfficientNetHiddenModel(MAM):
         return model_ft
 
 
-    def predict_with_cam(self, src, label, save_name='./gradcam_explainer.png'):
-        
+    def predict_with_cam(self, src, target_class=None, save_name='./gradcam_explainer.png'):
+
         target_layer = [self.model.features[-1]]
-        grad_img = self.generate_cam(src, label, target_layer, save_name)
+        grad_img = self.generate_cam(src, target_layer, target_class=target_class, save_name=save_name)
         return grad_img
 
-    
+
 class MediraiInceptionHiddenModel(MAM):
 
     def __init__(
@@ -192,13 +192,13 @@ class MediraiInceptionHiddenModel(MAM):
         return model_ft
 
 
-    def predict_with_cam(self, src, label, save_name='./gradcam_explainer.png'):
-        
+    def predict_with_cam(self, src, target_class=None, save_name='./gradcam_explainer.png'):
+
         for param in self.model.Mixed_7c.parameters():
             param.requires_grad = True
-            
+
         target_layer = [self.model.Mixed_7c]
-        grad_img = self.generate_cam(src, label, target_layer, save_name)
+        grad_img = self.generate_cam(src, target_layer, target_class=target_class, save_name=save_name)
 
         for param in self.model.Mixed_7c.parameters():
             param.requires_grad = False
@@ -263,9 +263,9 @@ class MediraiResNetHiddenModel(MAM):
         return model_ft
     
 
-    def predict_with_cam(self, src, label, save_name='./gradcam_explainer.png'):
- 
+    def predict_with_cam(self, src, target_class=None, save_name='./gradcam_explainer.png'):
+
         target_layer = [self.model.layer4[-1]]
-        grad_img = self.generate_cam(src, label, target_layer, save_name)
+        grad_img = self.generate_cam(src, target_layer, target_class=target_class, save_name=save_name)
         return grad_img
 

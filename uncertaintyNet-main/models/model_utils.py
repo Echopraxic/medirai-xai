@@ -84,7 +84,17 @@ def build_variational_model(
 				layer_indices = [0]
 	elif net_type == 'bayesian':
 		layer_selection = "all"
-		layer_indices = [i for i, l in enumerate(state_keys) if 'weight' in l and 'bn' not in l]
+		# Filter by the actual module type (P1-7), not by "bn" in the state_dict key: BatchNorm
+		# submodules are not always named "bn" (e.g. ResNet's "downsample.1"), so a name-based
+		# filter lets BatchNorm layers through and the replacement below fails with "not supported".
+		layer_indices = []
+		for i, key in enumerate(state_keys):
+			if 'weight' not in key:
+				continue
+			attr_name = key.split('.weight')[0]
+			_, _, _, layer = get_nested_attr(model, attr_name)
+			if isinstance(layer, (nn.Conv2d, nn.Conv3d, nn.Linear)):
+				layer_indices.append(i)
 	else:
 		raise ValueError(f"Unknown network type: {net_type}")
 
@@ -139,6 +149,24 @@ def build_variational_model(
 		torch.save(custom_checkpoint, output_path + f'/init_checkpoint.pth.tar')
 
 	return variational_model
+
+
+def mean_posterior_sigma(model: nn.Module) -> float:
+	"""Mean softplus(rho) (the posterior std) across every variational layer's weight/bias.
+
+	P1-5 diagnostic: if this collapses towards ~0, the variational posterior is behaving close
+	to deterministic, which would explain VLL accuracy tracking the deterministic baseline.
+	"""
+	sigmas = []
+	for m in model.modules():
+		if isinstance(m, bayeslayers.BaseVariationalLayer_):
+			for attr in ("rho_weight", "rho_kernel", "rho_bias"):
+				rho = getattr(m, attr, None)
+				if rho is not None:
+					sigmas.append(torch.log1p(torch.exp(rho)).mean())
+	if not sigmas:
+		return float("nan")
+	return float(torch.stack(sigmas).mean())
 
 
 class Identity(nn.Module):

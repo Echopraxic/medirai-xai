@@ -127,16 +127,20 @@ class MediraiBiomedClip:
         '''
 
         if isinstance(image_path, str):
-            image = Image.open(image_path)
-        
+            # P1-20: missing .convert('RGB') -- grayscale/RGBA/palette images would either
+            # fail to preprocess or be interpreted with the wrong number of channels.
+            image = Image.open(image_path).convert('RGB')
+
         if prompt is None:
             prompt = self.default_prompt
 
-        img = torch.stack([self.clip_preprocess(image)])
+        # P1-20: the image tensor was never moved to self.device, only the text tensor was,
+        # so this crashed with a device-mismatch error whenever self.device != 'cpu'.
+        img = torch.stack([self.clip_preprocess(image)]).to(self.device)
         text = self.clip_tokenizer(prompt, context_length=256).to(self.device)
 
         with torch.no_grad():
-            
+
             image_features, text_features, logits_scale = self.clip_model(img, text)
             logits = (logits_scale*image_features @ text_features.t()).detach().softmax(dim=-1)
             sorted_indices = torch.argsort(logits, dim=-1, descending=True)
@@ -144,8 +148,11 @@ class MediraiBiomedClip:
             logits = logits.cpu().numpy()[0]
             sorted_indices = sorted_indices.cpu().numpy()[0]
 
-            preds = np.argmax(sorted_indices)
-        
+            # P1-20: sorted_indices is already the list of class indices ordered by confidence,
+            # so argmax(sorted_indices) took the argmax of a permutation of {0, ..., C-1} -- not
+            # a prediction. The predicted class is simply the most confident entry, index 0.
+            preds = int(sorted_indices[0])
+
         return preds, image_features[0]
 
     def gen_n_image_features(self,

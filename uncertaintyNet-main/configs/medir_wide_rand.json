@@ -1,7 +1,7 @@
 {
     "Network": {
         "Basic Setup": {
-            "network_type": "determinstic",
+            "network_type": "deterministic",
             "architecture": "wide_resnet50p",
             "layer_type": "conv", 
             "task": "classification",
@@ -30,7 +30,7 @@
             "kfold": 1,
             "batch_size": 64,
             "run_val": true,
-            "val_patience": 5, 
+            "val_frequency": 1, 
             "multi_label": false,
             "flatten_input": false
         },

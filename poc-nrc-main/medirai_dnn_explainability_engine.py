@@ -37,31 +37,32 @@ class MediraiDNNExplainers:
         self.dnns.load(path_to_inception=dnn_model_paths[2])
         self.dnns.load(path_to_resnet=dnn_model_paths[3])
 
-    def get_all_explainers(self, img : str, target_class : int, base_outname: str = './explainer.png'):
+    def get_all_explainers(self, img : str, target_class : int = None, base_outname: str = './explainer.png'):
         '''
-        Produce all three explainabilities for all four models provided a single 
+        Produce all three explainabilities for all four models provided a single
         image path.
 
         Parameters
         ----------
         img : str
             path to image to be explained
-        target_class : int
-            for gradcam explainer to work properly a class needs to be provided. Must
-            be 0 or 1. 
+        target_class : int | None
+            Class for GradCAM to explain. Defaults to each model's own predicted class
+            (P1-16: explanations shown to clinicians must justify the prediction, not a
+            ground-truth label the model may disagree with). Pass 0 or 1 to override.
         base_outname : str
             sample output name and path to be modified to save all results. Must end
             in ".png"
         '''
-        
+
         if base_outname[-4:] != '.png':
             raise ValueError(f'Keyword argument "base_outname" must end in ".png", but ends in {base_outname[-4:]}')
 
         self.get_gradcam_explainers(img, target_class, base_outname=base_outname.replace('.png', '_gradcam.png'))
         self.get_shap_explainers(img, base_outname=base_outname.replace('.png', '_shap.png'))
         self.get_lime_explainers(img, base_outname=base_outname.replace('.png', '_lime.png'))
-       
-    def get_gradcam_explainers(self, img : str, target_class : int, base_outname='./explainer_gradcam.png'):
+
+    def get_gradcam_explainers(self, img : str, target_class : int = None, base_outname='./explainer_gradcam.png'):
         '''
         Generate gradcam explainers for all four model for the provided input image.
 
@@ -69,9 +70,9 @@ class MediraiDNNExplainers:
         ----------
         img : str
             path to image to be explained
-        target_class : int
-            for gradcam explainer to work properly a class needs to be provided. Must
-            be 0 or 1. 
+        target_class : int | None
+            Class for GradCAM to explain. Defaults to each model's own predicted class
+            (P1-16). Pass 0 or 1 to override.
         base_outname : str
             sample output name and path to be modified to save all results. Must end
             in ".png"
@@ -135,10 +136,11 @@ if __name__ == '__main__':
                     '../saved_models/dnns_mixup_3M/res_net_w_hid_best_mixup_3M.pkl',]
 
     explainers = MediraiDNNExplainers(model_paths)
-    
-    sample_img, sample_is_malig = './sample_data/sample_img.jpg', 0
 
-    explainers.get_all_explainers(sample_img, sample_is_malig, base_outname = './explainability_examples/explainer.png')
+    sample_img = './sample_data/sample_img.jpg'
+
+    # target_class defaults to None -> GradCAM explains each model's own predicted class (P1-16).
+    explainers.get_all_explainers(sample_img, base_outname = './explainability_examples/explainer.png')
 
 
 

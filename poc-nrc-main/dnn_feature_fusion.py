@@ -490,27 +490,42 @@ class FeatureFusionTrainer():
             num_workers=2
         )
     
+        # P1-14: FFModel is a bare wrapper (no .parameters()/.state_dict()/__call__); the
+        # underlying nn.Module lives at self.model.model.
+        fusion_model = self.model.model
+
         optimizer = optim.AdamW(
-                            self.model.parameters(), 
+                            fusion_model.parameters(),
                             lr=learning_rate,
                             weight_decay=weight_decay,
                         )
         criterion = nn.CrossEntropyLoss()
-        
+
+        def set_train_mode():
+            # P1-14: fusion_model.train() alone would flip the frozen backbones back into train
+            # mode, so their BatchNorm layers keep updating running stats every forward pass even
+            # though requires_grad=False stops their weights from being updated. Re-freeze them
+            # into eval() right after.
+            fusion_model.train()
+            for backbone in (fusion_model.dense_net, fusion_model.efficient_net,
+                              fusion_model.inception, fusion_model.res_net):
+                backbone.eval()
+
         iter = 0
         for epoch in range(num_epochs):
 
             print(f'epoch {epoch+1}/{num_epochs}')
 
+            set_train_mode()
             correct = 0
             total = 0
             for i, (images_244, images_299, labels) in enumerate(tqdm(train_loader)):
-                
+
                 if self.device == 'cuda':
                     images_244, images_299, labels = images_244.to('cuda'), images_299.to('cuda'), labels.to('cuda')
-                
+
                 optimizer.zero_grad()
-                outputs = self.model(images_244, images_299)
+                outputs = fusion_model(images_244, images_299)
                 loss = criterion(outputs, labels.long())
                 loss.backward()
                 optimizer.step()
@@ -523,26 +538,28 @@ class FeatureFusionTrainer():
             accuracy = 100 * correct / total
             print(f'Train accuracy epoch {epoch+1}: {accuracy.detach().numpy():.4f}')
             #if epoch % 10 == 0:
-                        
+
+            fusion_model.eval()
             correct = 0
             total = 0
             # Iterate through test dataset
-            for images_244, images_299, labels in tqdm(val_loader):
+            with torch.no_grad():
+                for images_244, images_299, labels in tqdm(val_loader):
 
-                outputs = self.model(images_244, images_299)
-                _, predicted = torch.max(outputs.data, 1)
-                total = total + labels.size(0)
-                correct = correct + (predicted == labels).sum()
+                    outputs = fusion_model(images_244, images_299)
+                    _, predicted = torch.max(outputs.data, 1)
+                    total = total + labels.size(0)
+                    correct = correct + (predicted == labels).sum()
 
             accuracy = 100 * correct / total
             print(f'Val accuracy epoch {epoch+1}: {accuracy.detach().numpy():.4f}')
             if self.model_name is None:
                 print('model_name is None' )
-                torch.save(self.model.state_dict(), f'./saved_models/fusion/feature_fusion_epoch-{epoch}.plk')
+                torch.save(fusion_model.state_dict(), f'./saved_models/fusion/feature_fusion_epoch-{epoch}.plk')
             else:
                 val_acc = accuracy.detach().numpy()
                 print('Saving', self.model_name.replace('XYYX', str(epoch)))
-                torch.save(self.model.state_dict(), self.model_name.replace('XYYX', str(epoch)).replace('.plk', f'-val_acc_{val_acc:.4f}.pkl')) 
+                torch.save(fusion_model.state_dict(), self.model_name.replace('XYYX', str(epoch)).replace('.plk', f'-val_acc_{val_acc:.4f}.pkl'))
 
 
 
