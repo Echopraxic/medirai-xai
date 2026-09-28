@@ -2,7 +2,7 @@
     "Network": {
         "Basic Setup": {
             "network_type": "partial_bayesian",
-            "architecture": "resunet",
+            "architecture": "UNET",
             "layer_type": "conv", 
             "task": "segmentation",
             "input_size": 224,
@@ -29,7 +29,7 @@
             "kfold": 1,
             "batch_size": 64,
             "run_val": true,
-            "val_patience": 5, 
+            "val_frequency": 1, 
             "multi_label": false,
             "flatten_input": false
         },

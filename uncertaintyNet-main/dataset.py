@@ -194,7 +194,7 @@ def get_isic_files(root_dir, subset):
 	return data_dicts
 
 
-def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: bool=False):
+def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: bool=False, generator=None):
 
 	dataset = data_config["dataset"]
 	train_shuffle = True if data_config["kfold"] < 2 else False
@@ -329,8 +329,9 @@ def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: boo
 		if data_config["kfold"] > 1: 
 			return train_data, None 
 		
-		train_loader = DataLoader(dataset=train_data, batch_size=data_config["batch_size"], 
-							shuffle=train_shuffle, pin_memory=True, drop_last=True)
+		train_loader = DataLoader(dataset=train_data, batch_size=data_config["batch_size"],
+							shuffle=train_shuffle, pin_memory=True, drop_last=True,
+							generator=generator if train_shuffle else None)
 	
 	if data_config["run_val"] or test: 
 		if data_config["kfold"] > 1 and test: 

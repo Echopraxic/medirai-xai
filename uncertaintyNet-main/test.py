@@ -197,11 +197,17 @@ def test_single_fold(network, test_loader, output_path, fold=0):
 				if net_config["task"] == 'classification':
 					metrics['MaxSoftmax'] = float(conf.mean(0).max())
 					metrics['VarSoftmax'] = float(conf.max(-1).values.var()) #variance of the maxsoftmax
-					metrics['Y_conf'] = float(conf.mean(0)[0, metrics['Y_pred']]) ## confidence of the true class
+					# P1-11: this indexes the *predicted* class, not the true class (the old comment
+					# was wrong); renamed and a true-class confidence added alongside it.
+					metrics['Y_pred_conf'] = float(conf.mean(0)[0, metrics['Y_pred']])
+					metrics['Y_true_conf'] = float(conf.mean(0)[0, metrics['Y']])
 			else: 
 				if net_config["task"] == 'classification':
 					metrics['MaxSoftmax'] = float(conf.mean(0).max())
-					metrics['Y_conf'] = float(conf[0, metrics['Y_pred']])  ## confidence of the true class
+					# P1-11: this indexes the *predicted* class, not the true class (the old comment
+					# was wrong); renamed and a true-class confidence added alongside it.
+					metrics['Y_pred_conf'] = float(conf[0, metrics['Y_pred']])
+					metrics['Y_true_conf'] = float(conf[0, metrics['Y']])
 					# confidences_.append(conf)
 				if net_config["task"] != 'regression':
 					metrics['Test Brier Score'] = utils.compute_brier_score(outputs, targets, nll_loss, one_hot_targets, 

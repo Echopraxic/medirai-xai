@@ -171,7 +171,7 @@ class MediraiInferenceEngine:
                 derm_path,
                 mlp_input_size,
                 mlp_hidden_size,
-                device='cpu'
+                device=self.device  # P1-19: was hard-coded to 'cpu', ignoring the engine's device
             )
         self.found_fusion.load(mlp_path)
         self.loaded_models.append('found_fusion')
@@ -222,6 +222,12 @@ class MediraiInferenceEngine:
         self.loaded_models.append('global_fusion')
 
 
+    @staticmethod
+    def _softmax(logits: np.ndarray) -> np.ndarray:
+        logits = np.asarray(logits, dtype=float)
+        e_x = np.exp(logits - np.max(logits))
+        return e_x / e_x.sum()
+
     def predict(self, img : str) -> dict:
         '''
         Run inference on supplied image for all loaded models
@@ -230,42 +236,52 @@ class MediraiInferenceEngine:
         ----------
         img : str
             path to image to perform inference on
-        
+
         Returns
         -------
         preds : dict
-            predictions from all loaded models
+            predictions from all loaded models. Every model contributes the same shape of
+            entry -- {'probs': ..., 'pred': ...}, plus 'logits' where the underlying model
+            exposes them (P1-15: previously some entries were probabilities, others were bare
+            argmax labels, and dnn_fusion took argmax over a (logits, probs) tuple -- this made
+            downstream agreement-deferral/entropy analysis compare incompatible quantities).
 
         '''
-        
+
         preds = {}
 
         if 'clip' in self.loaded_models:
-            clip_pred = self.clip.predict(img).detach().numpy()
-            preds['clip'] = np.argmax(clip_pred)
+            clip_logits = self.clip.predict(img).detach().cpu().numpy().squeeze()
+            clip_probs = self._softmax(clip_logits)
+            preds['clip'] = {'logits': clip_logits, 'probs': clip_probs, 'pred': int(np.argmax(clip_probs))}
 
         if 'derm' in self.loaded_models:
-            derm_pred = self.derm.predict(img)
-            preds['derm'] = np.argmax(derm_pred)
-            
+            derm_logits = np.asarray(self.derm.predict(img)).squeeze()
+            derm_probs = self._softmax(derm_logits)
+            preds['derm'] = {'logits': derm_logits, 'probs': derm_probs, 'pred': int(np.argmax(derm_probs))}
+
         if 'dnns' in self.loaded_models:
+            # MediraiEnsembleModelV1.predict only exposes probabilities, not raw logits.
             dnn_probs, dnn_preds = self.dnns.predict(img)
-            preds['densenet'] = dnn_probs[0]
-            preds['efficientnet'] = dnn_probs[1]
-            preds['inception'] = dnn_probs[2]
-            preds['resnet'] = dnn_probs[3]
-        
+            for i, name in enumerate(('densenet', 'efficientnet', 'inception', 'resnet')):
+                preds[name] = {'probs': dnn_probs[i], 'pred': int(dnn_preds[i])}
+
         if 'dnn_fusion' in self.loaded_models:
-            dnn_fusion_pred = self.dnn_fusion.predict(img, self.device)
-            preds['dnn_fusion'] = np.argmax(dnn_fusion_pred)
-        
+            dnn_fusion_logits, dnn_fusion_probs = self.dnn_fusion.predict(img, self.device)
+            preds['dnn_fusion'] = {'logits': dnn_fusion_logits, 'probs': dnn_fusion_probs,
+                                    'pred': int(np.argmax(dnn_fusion_probs))}
+
         if 'found_fusion' in self.loaded_models:
-            found_fusion_pred = self.found_fusion.predict(img).detach().numpy()
-            preds['found_fusion'] = np.argmax(found_fusion_pred)
+            found_fusion_logits = self.found_fusion.predict(img).detach().cpu().numpy().squeeze()
+            found_fusion_probs = self._softmax(found_fusion_logits)
+            preds['found_fusion'] = {'logits': found_fusion_logits, 'probs': found_fusion_probs,
+                                      'pred': int(np.argmax(found_fusion_probs))}
 
         if 'global_fusion' in self.loaded_models:
-            global_fusion_pred = self.global_fusion.predict(img)
-            preds['global_fusion'] = np.argmax(global_fusion_pred)
+            global_fusion_logits = np.asarray(self.global_fusion.predict(img)).squeeze()
+            global_fusion_probs = self._softmax(global_fusion_logits)
+            preds['global_fusion'] = {'logits': global_fusion_logits, 'probs': global_fusion_probs,
+                                       'pred': int(np.argmax(global_fusion_probs))}
 
         return preds
 

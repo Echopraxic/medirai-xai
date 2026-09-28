@@ -30,7 +30,7 @@
             "kfold": 1,
             "batch_size": 128,
             "run_val": true,
-            "val_patience": 5, 
+            "val_frequency": 1, 
             "multi_label": false,
             "flatten_input": false
         },

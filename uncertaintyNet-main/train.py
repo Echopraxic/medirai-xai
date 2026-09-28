@@ -55,8 +55,30 @@ train_config = config["Training"]["Parameters"]
 bayes_config = config["Training"]["Bayesian Parameters"]
 pbayes_config = config["Training"]["Partial Bayesian Parameters"]
 lbayes_config = config["Training"]["Layer Bayesian Parameters"]
-criterion = utils.get_loss_func(train_config["loss_func"], label_smoothing=train_config["label_smoothing"], dataset=data_config["dataset"]) 
-nll_loss = True if train_config["loss_func"] == "nll_loss" else False
+criterion = utils.get_loss_func(train_config["loss_func"], label_smoothing=train_config["label_smoothing"], dataset=data_config["dataset"])
+# Must match get_loss_func's case-insensitive "NLL" check (P1-9): this used to compare against
+# "nll_loss", a string get_loss_func never produces, so the flag was always False and downstream
+# brier score / accuracy calcs applied softmax to already-log-probability NLL outputs.
+nll_loss = train_config["loss_func"].upper() == "NLL"
+
+#######################################################################################################
+### SET UP SEED FOR REPRODUCIBILITY
+### Must happen before the data loaders and the network are built: otherwise DataLoader shuffling
+### and weight initialization consume RNG state that differs run to run regardless of the seed.
+def set_seed(seed):
+	torch.manual_seed(seed)
+	torch.cuda.manual_seed(seed)
+	np.random.seed(seed)
+	random.seed(seed)
+
+if opts.seed is not None:
+	seed = opts.seed
+	train_config['seed'] = seed
+else:
+	seed = train_config['seed']
+torch.autograd.set_detect_anomaly(True)
+set_seed(seed)
+data_generator = torch.Generator().manual_seed(seed)
 
 #######################################################################################################
 ### SET UP DEVICE AND MULTI-GPU IF NEEDED
@@ -72,7 +94,7 @@ if opts.multi_gpu:
 
 #######################################################################################################
 ### LOAD DATA
-data_loader, val_loader = dataset.get_dataloader(root=dataset_path, input_size=net_config["input_size"], data_config=data_config)
+data_loader, val_loader = dataset.get_dataloader(root=dataset_path, input_size=net_config["input_size"], data_config=data_config, generator=data_generator)
 
 #######################################################################################################
 ### NETWORK INITIALIZATION
@@ -95,8 +117,10 @@ def initialize_partial_bayes(fold=None):
 
 	init_net_setup = init_net_config['Network']['Basic Setup']
 	opts.seed = init_net_config['Training']['Parameters']['seed']
+	train_config['seed'] = opts.seed
+	set_seed(opts.seed)  # reseed: the init network's own weight init/loading must be reproducible
 
-	### LOAD THE INITIALIZATION NETWORK 
+	### LOAD THE INITIALIZATION NETWORK
 	network = model.get_model(init_net_setup)
 	if init_net != '':
 		network, _ = utils.load_checkpoint(net=network, init_path=init_net, fold=fold, cont_run=False)
@@ -114,7 +138,7 @@ else:
 		init_net_config['Network']['Basic Setup']['network_type'] = 'deterministic'
 		init_net_setup = init_net_config['Network']['Basic Setup']
 		network = model.get_model(init_net_setup)
-		network = mutils.build_variational_model(network, net_config["network_type"], config["Paths"]["save_path"], bayes_configs, pbayes_config, lbayes_config)
+		network = mutils.build_variational_model(network, net_config["network_type"], config["Paths"]["save_path"], bayes_config, pbayes_config, lbayes_config)
 	else:
 		network = model.get_model(net_config)
 
@@ -138,19 +162,6 @@ if train_config["continue_run"]:
 else:
 	epoch_start = 0
 
-#######################################################################################################
-if opts.seed is not None:
-	seed = opts.seed
-	train_config['seed'] = seed
-else:
-	seed = train_config['seed']
-
-### SET UP SEED FOR REPRODUCIBILITY
-torch.autograd.set_detect_anomaly(True)
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
-np.random.seed(seed)
-random.seed(seed)
 #######################################################################################################
 ## LOGGING
 if not os.path.isdir(config["Paths"]['save_path']):
@@ -211,8 +222,10 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 		total_dice = 0
 		total_iou = 0
 		total_acc = 0
-		total_kl = 0 
-		for step, (inputs, targets, *args) in enumerate(train_data_iter): 
+		total_kl = 0
+		total_weighted_kl = 0  # P1-5: KL contribution actually added to the loss, vs. raw total_kl
+		total_likelihood = 0   # P1-5: NLL term, to compare against the (weighted) KL term
+		for step, (inputs, targets, *args) in enumerate(train_data_iter):
 			if not multi_gpu:
 				inputs = inputs.to(device)
 				targets = targets.to(device)
@@ -239,19 +252,27 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 						rmse.append(torch.sqrt(criterion(outputs[i], targets)))
 					rmse = torch.stack(rmse, dim=0)
 					likelihood = rmse.mean()
-					total_rmse += float(likelihood)					
+					total_rmse += float(likelihood)
 					std = rmse.std()
+					likelihood_std = torch.zeros((), device=likelihood.device)  # no such term for regression
 				else:
 					likelihood = []
 					for i in range(bayes_config["num_samples"]):
 						likelihood.append(criterion(outputs[i], targets))
-					likelihood = torch.mean(torch.stack(likelihood))
-					std = utils.compute_brier_score(outputs, targets, nll_loss, one_hot_targets, 
-									 num_classes=net_config["output_size"], task=net_config["task"], 
+					likelihood = torch.stack(likelihood)
+					likelihood_std = torch.std(likelihood)
+					likelihood = torch.mean(likelihood)
+					std = utils.compute_brier_score(outputs, targets, nll_loss, one_hot_targets,
+									 num_classes=net_config["output_size"], task=net_config["task"],
 									 multi_label=data_config["multi_label"], dataset=data_config["dataset"])
-				
+
 				total_std += float(std)
-				loss = likelihood + kl_weight.get_weight(step, epoch)*kl
+				weighted_kl = kl_weight.get_weight(step, epoch)*kl
+				total_weighted_kl += float(weighted_kl)
+				total_likelihood += float(likelihood)
+				# Same objective as validation (P1-4): both include likelihood_std, so model
+				# selection compares like with like instead of a train loss that is missing a term.
+				loss = likelihood + weighted_kl + likelihood_std
 				
 			if net_config["task"] == "classification": 
 				#accuracy calculated as a mean of the batch
@@ -280,15 +301,20 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 			optimizer.step()
 			
 		metrics["Train Time"] = time.time()-epoch_time
-		metrics['Train Loss'] = total_loss/(max(step, 1))
-		metrics["Train Accuracy"] = total_acc / max(step, 1)
-		metrics["Train RMSE"] = total_rmse / max(step, 1)
-		metrics["Train Std"] = total_std / max(step, 1)
-		metrics["Train KL"] = total_kl / max(step, 1)
-		metrics["Train Brier Score"] = total_std / max(step, 1)
-		metrics["Train Dice"] = total_dice / max(step, 1)
-		metrics["Train IoU"] = total_iou / max(step, 1)
-		output_metrics_train = [metrics[key] for key in logging_keys if 'Train' in key and "Best" not in key] 
+		metrics['Train Loss'] = total_loss/(step + 1)
+		metrics["Train Accuracy"] = total_acc / (step + 1)
+		metrics["Train RMSE"] = total_rmse / (step + 1)
+		metrics["Train Std"] = total_std / (step + 1)
+		metrics["Train KL"] = total_kl / (step + 1)
+		metrics["Train Brier Score"] = total_std / (step + 1)
+		metrics["Train Dice"] = total_dice / (step + 1)
+		metrics["Train IoU"] = total_iou / (step + 1)
+		if 'bayesian' in net_config["network_type"]:
+			# P1-5: track posterior collapse (sigma -> 0) and how much the KL term actually
+			# contributes to the loss relative to the likelihood (NLL) term.
+			metrics["Train Sigma"] = mutils.mean_posterior_sigma(network)
+			metrics["Train KL/NLL Ratio"] = total_weighted_kl / total_likelihood if total_likelihood else float("nan")
+		output_metrics_train = [metrics[key] for key in logging_keys if 'Train' in key and "Best" not in key]
 		output_metrics_val = []
 		metric_formats = {
 			"classification": {
@@ -316,7 +342,9 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 		total_dice = 0
 		total_iou = 0
 		total_kl = 0
-		if data_config["run_val"] and epoch%data_config["val_patience"]==0:
+		total_weighted_kl = 0
+		total_likelihood = 0
+		if data_config["run_val"] and epoch%data_config["val_frequency"]==0:
 			val_data_iter = tqdm(val_loader, position=2)
 			epoch_time = time.time()
 			network.eval()
@@ -348,8 +376,9 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 								rmse.append(torch.sqrt(criterion(outputs[i], targets)))
 							rmse = torch.stack(rmse, dim=0)
 							likelihood = rmse.mean()
-							total_rmse += float(likelihood)					
+							total_rmse += float(likelihood)
 							std = rmse.std()
+							likelihood_std = torch.zeros((), device=likelihood.device)  # no such term for regression
 						else:
 							likelihood = []
 							for i in range(bayes_config["num_samples"]):
@@ -362,8 +391,11 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 									   multi_label=data_config["multi_label"], dataset=data_config["dataset"])
 						
 						total_std += float(std)
-						loss = likelihood + kl_weight.get_weight(step, epoch)*kl + likelihood_std
-						
+						weighted_kl = kl_weight.get_weight(step, epoch)*kl
+						total_weighted_kl += float(weighted_kl)
+						total_likelihood += float(likelihood)
+						loss = likelihood + weighted_kl + likelihood_std
+
 					if net_config["task"] == "classification": 
 						#accuracy calculated as a mean of the batch
 						total_acc += utils.calculate_accuracy(outputs, targets, nll_loss, one_hot_targets, data_config["multi_label"])
@@ -382,17 +414,20 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 
 					total_loss += float(loss)
 
-		if data_config["run_val"] and epoch%data_config["val_patience"]==0:
+		if data_config["run_val"] and epoch%data_config["val_frequency"]==0:
 			
 			metrics["Val Time"] = time.time()-epoch_time
-			metrics['Val Loss'] = total_loss/max(step, 1)	
-			metrics["Val Accuracy"] = total_acc / max(step, 1)
-			metrics["Val RMSE"] = total_rmse / max(step, 1)
-			metrics["Val Std"] = total_std / max(step, 1)
-			metrics["Val KL"] = total_kl / max(step, 1)
-			metrics["Val Brier Score"] = total_std / max(step, 1)
-			metrics["Val Dice"] = total_dice / max(step, 1)
-			metrics["Val IoU"] = total_iou / max(step, 1)
+			metrics['Val Loss'] = total_loss/(step + 1)	
+			metrics["Val Accuracy"] = total_acc / (step + 1)
+			metrics["Val RMSE"] = total_rmse / (step + 1)
+			metrics["Val Std"] = total_std / (step + 1)
+			metrics["Val KL"] = total_kl / (step + 1)
+			metrics["Val Brier Score"] = total_std / (step + 1)
+			metrics["Val Dice"] = total_dice / (step + 1)
+			metrics["Val IoU"] = total_iou / (step + 1)
+			if 'bayesian' in net_config["network_type"]:
+				metrics["Val Sigma"] = mutils.mean_posterior_sigma(network)
+				metrics["Val KL/NLL Ratio"] = total_weighted_kl / total_likelihood if total_likelihood else float("nan")
 
 			metric_formats = {
 				"classification": {
@@ -494,7 +529,9 @@ if data_config["kfold"] > 1:
 else: 
 	print("Running a single split training loop")
 	if multi_gpu:
-		network, optimizers = fabric.setup(network, optimizer)
+		# P1-12: fabric.setup returns the Fabric-wrapped optimizer; using the stale unwrapped
+		# `optimizer` here meant gradient sync/precision handling set up by fabric never took effect.
+		network, optimizer = fabric.setup(network, optimizer)
 		data_loader, val_loader = fabric.setup_dataloaders(data_loader, val_loader)
 	train_single_fold(network, data_loader, val_loader, optimizer=optimizer, full_log=full_log,
 					output_path=Path(config["Paths"]['save_path']), fold=0, network_type=net_config["network_type"], multi_gpu=multi_gpu)

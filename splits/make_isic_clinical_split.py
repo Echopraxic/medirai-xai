@@ -19,7 +19,17 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import sklearn
 from sklearn.model_selection import StratifiedGroupKFold, train_test_split
+
+# scikit-learn 1.8 changed StratifiedGroupKFold's shuffled fold assignment: the same seed and
+# input now produce a different split (~60% of images move, verified 1.7.2 vs 1.8.0/1.9.1). Keep
+# this in lockstep with the scikit-learn pin in requirements.txt.
+_SKLEARN_VERSION = tuple(int(p) for p in sklearn.__version__.split(".")[:2])
+if _SKLEARN_VERSION >= (1, 8):
+    raise RuntimeError(
+        f"scikit-learn {sklearn.__version__} changed StratifiedGroupKFold's shuffled assignment; "
+        "isic_clinical_v1.csv will not reproduce. Install scikit-learn<1.8 (see requirements.txt).")
 
 SEED = 42
 LABEL_MAP = {"Benign": 0, "Malignant": 1}
