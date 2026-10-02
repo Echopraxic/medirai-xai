@@ -194,6 +194,36 @@ def get_isic_files(root_dir, subset):
 	return data_dicts
 
 
+def subsample_train(df_train, fraction, seed=0):
+	"""Keep `fraction` of the training lesion/patient groups, stratified by label (for learning curves).
+	Whole groups are kept or dropped, so no group is split; val/test are never touched."""
+	groups = df_train.groupby("group_id")["label"].max().reset_index()
+	keep = (groups.groupby("label", group_keys=False)
+			.apply(lambda g: g.sample(frac=fraction, random_state=seed))["group_id"])
+	return df_train[df_train["group_id"].isin(set(keep))].reset_index(drop=True)
+
+
+def medirv2_transforms(input_size):
+	"""(train, test) transforms for MEDIRV2; shared with evaluation scripts so preprocessing never drifts."""
+	normalize = transforms.Normalize(mean=[0.6689, 0.5090, 0.4417],
+									std=[0.1336, 0.1352, 0.1486])
+	train_transform = transforms.Compose([
+		transforms.Resize((input_size, input_size)),
+		transforms.RandomHorizontalFlip(),
+		transforms.RandomVerticalFlip(),
+		transforms.RandomRotation(60),
+		transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+		transforms.ToTensor(),
+		normalize,
+	])
+	test_transform = transforms.Compose([
+		transforms.Resize((input_size, input_size)),
+		transforms.ToTensor(),
+		normalize,
+	])
+	return train_transform, test_transform
+
+
 def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: bool=False, generator=None):
 
 	dataset = data_config["dataset"]
@@ -251,29 +281,14 @@ def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: boo
 		# lesion/patient group as a training image (see splits/isic_clinical_v1_report.md).
 		df = load_split(data_config.get("split_file"), data_dir)
 
-		normalize = transforms.Normalize(mean=[0.6689, 0.5090, 0.4417],
-										std=[0.1336, 0.1352, 0.1486])
-
-		train_transform = transforms.Compose([
-			transforms.Resize((input_size, input_size)),  
-			transforms.RandomHorizontalFlip(),
-			transforms.RandomVerticalFlip(),
-			transforms.RandomRotation(60),
-			transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-			transforms.ToTensor(),
-			normalize,
-		])
-
-		test_transform = transforms.Compose([
-			transforms.Resize((input_size, input_size)),
-			transforms.ToTensor(),
-			normalize,
-		])
+		train_transform, test_transform = medirv2_transforms(input_size)
 
 		if data_config["kfold"] != 1:
 			raise NotImplementedError("MEDIRV2 uses the persisted split file; k-fold is not supported (set kfold=1).")
 		else:
 			df_train = df[df["split"] == "train"].reset_index(drop=True)
+			if data_config.get("train_fraction", 1.0) < 1.0:
+				df_train = subsample_train(df_train, data_config["train_fraction"], data_config.get("subsample_seed", 0))
 			df_val = df[df["split"] == "val"].reset_index(drop=True)
 			df_test = df[df["split"] == "test"].reset_index(drop=True)
 
