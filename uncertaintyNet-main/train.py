@@ -39,6 +39,9 @@ parse_in.add_argument('--init_network', type=str, default=None,
 					help='override Partial Bayesian Parameters/init_network (run folder under output/)')
 parse_in.add_argument('--network_type', type=str, default=None, choices=['deterministic', 'partial_bayesian', 'bayesian'],
 					help='override Network/Basic Setup/network_type (e.g. partial_bayesian + --init_network for a VLL)')
+parse_in.add_argument('--train_fraction', type=float, default=None,
+					help='MEDIRV2: train on this fraction of training lesion groups (learning curves); val/test unchanged')
+parse_in.add_argument('--subsample_seed', type=int, default=0, help='seed for --train_fraction')
 parse_in.add_argument('--epochs',       type=int, default=None, help='override Training/Parameters/num_epochs')
 parse_in.add_argument('--no_likelihood_std', action='store_true',
 					help='variational nets: plain ELBO (NLL + weighted KL) in train and val, without the '
@@ -59,6 +62,9 @@ if opts.save_path is not None:
 	config["Paths"]["save_path"] = opts.save_path
 if opts.init_network is not None:
 	config["Training"]["Partial Bayesian Parameters"]["init_network"] = opts.init_network
+if opts.train_fraction is not None:
+	config["Training"]["Dataset"]["train_fraction"] = opts.train_fraction
+	config["Training"]["Dataset"]["subsample_seed"] = opts.subsample_seed
 if opts.epochs is not None:
 	config["Training"]["Parameters"]["num_epochs"] = opts.epochs
 if opts.network_type is not None:

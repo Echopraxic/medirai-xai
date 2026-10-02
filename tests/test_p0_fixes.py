@@ -250,3 +250,15 @@ def test_uncertaintynet_reads_persisted_split(tmp_path):
     assert set(df["split"]) == {"train", "val", "test"} and df["label"].notna().all()
     with pytest.raises(FileNotFoundError, match="missing"):
         dataset.load_split(data_dir=str(tmp_path))  # empty image folder -> clear error, not a silent skip
+
+
+# --------------------------------------------------------------------------- learning-curve subsampling (S2)
+def test_train_subsample_keeps_whole_groups_and_label_balance():
+    import dataset
+    train = dataset.load_split().query("split == 'train'").reset_index(drop=True)
+    sub = dataset.subsample_train(train, 0.25, seed=0)
+    kept = set(sub.group_id)
+    assert len(train[train.group_id.isin(kept)]) == len(sub)          # no group is split
+    assert abs(sub.group_id.nunique() / train.group_id.nunique() - 0.25) < 0.01
+    assert abs(sub.label.mean() - train.label.mean()) < 0.03
+    assert sub.equals(dataset.subsample_train(train, 0.25, seed=0))   # reproducible
