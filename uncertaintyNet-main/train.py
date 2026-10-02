@@ -27,6 +27,23 @@ parse_in.add_argument('--no_date',      action='store_true', help='Do not use da
 parse_in.add_argument('--continue_run', action='store_true', help='continue interrupted run')
 parse_in.add_argument('--seed', 		type=int, default=None, help='random seed' )
 parse_in.add_argument('--multi_gpu',	action='store_true', default=False, help='Use multiple GPUs if available.')
+# Small-GPU options (defaults keep the original behaviour). grad_accum N steps the optimizer every N batches,
+# so batch_size B with --grad_accum N has an effective batch of B*N (BatchNorm still sees B).
+parse_in.add_argument('--amp',          action='store_true', help='fp16 autocast + GradScaler (CUDA only)')
+parse_in.add_argument('--grad_accum',   type=int, default=1, help='gradient accumulation steps')
+parse_in.add_argument('--batch_size',   type=int, default=None, help='override Training/Dataset/batch_size')
+parse_in.add_argument('--no_compile',   action='store_true', help='skip torch.compile (needs Triton; unavailable on Windows)')
+parse_in.add_argument('--dataset_path', type=str, default=None, help='override Paths/dataset_path')
+parse_in.add_argument('--save_path',    type=str, default=None, help='override Paths/save_path')
+parse_in.add_argument('--init_network', type=str, default=None,
+					help='override Partial Bayesian Parameters/init_network (run folder under output/)')
+parse_in.add_argument('--network_type', type=str, default=None, choices=['deterministic', 'partial_bayesian', 'bayesian'],
+					help='override Network/Basic Setup/network_type (e.g. partial_bayesian + --init_network for a VLL)')
+parse_in.add_argument('--epochs',       type=int, default=None, help='override Training/Parameters/num_epochs')
+parse_in.add_argument('--no_likelihood_std', action='store_true',
+					help='variational nets: plain ELBO (NLL + weighted KL) in train and val, without the '
+						 'MC-sample loss spread term added for P1-4')
+parse_in.add_argument('--detect_anomaly', action='store_true', help='torch.autograd anomaly detection (debug only; several times slower)')
 
 opts = parse_in.parse_args()
 
@@ -36,6 +53,16 @@ if opts.search_setup == '':
 	opts.search_setup = Path(__file__).resolve().parent
 
 config = utils.read_config(opts.search_setup/'configs', file=opts.config)
+if opts.dataset_path is not None:
+	config["Paths"]["dataset_path"] = os.path.abspath(opts.dataset_path)  # train.py later chdirs into the run folder
+if opts.save_path is not None:
+	config["Paths"]["save_path"] = opts.save_path
+if opts.init_network is not None:
+	config["Training"]["Partial Bayesian Parameters"]["init_network"] = opts.init_network
+if opts.epochs is not None:
+	config["Training"]["Parameters"]["num_epochs"] = opts.epochs
+if opts.network_type is not None:
+	config["Network"]["Basic Setup"]["network_type"] = opts.network_type
 if config["Paths"]["save_path"] == '':
 	config["Paths"]["save_path"] = str(Path(__file__).resolve().parent / 'output' / 'run')
 else:
@@ -52,7 +79,13 @@ else:
 net_config = config["Network"]["Basic Setup"]
 data_config = config["Training"]["Dataset"]
 train_config = config["Training"]["Parameters"]
+if opts.batch_size is not None:
+	data_config["batch_size"] = opts.batch_size
+data_config["grad_accum"] = opts.grad_accum
+train_config["amp"] = opts.amp
 bayes_config = config["Training"]["Bayesian Parameters"]
+bayes_config["likelihood_std_in_loss"] = not opts.no_likelihood_std  # recorded in the run's config.json
+likelihood_std_weight = 0.0 if opts.no_likelihood_std else 1.0
 pbayes_config = config["Training"]["Partial Bayesian Parameters"]
 lbayes_config = config["Training"]["Layer Bayesian Parameters"]
 criterion = utils.get_loss_func(train_config["loss_func"], label_smoothing=train_config["label_smoothing"], dataset=data_config["dataset"])
@@ -76,7 +109,7 @@ if opts.seed is not None:
 	train_config['seed'] = seed
 else:
 	seed = train_config['seed']
-torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(opts.detect_anomaly)
 set_seed(seed)
 data_generator = torch.Generator().manual_seed(seed)
 
@@ -187,7 +220,19 @@ network.n_params = utils.gimme_params(network, partial_bayes=True if net_config[
 torch.set_float32_matmul_precision('high')
 torch.backends.cudnn.benchmark = True
 compiled = False
-if hasattr(torch, 'compile'):
+if opts.amp:
+	# Autocast inside forward() so callers (train/val loops, metrics) keep receiving fp32 tensors and the
+	# state_dict keys are unchanged (no wrapper module).
+	_plain_forward = network.forward
+	def _amp_forward(*args, **kwargs):
+		with torch.autocast('cuda', dtype=torch.float16):
+			out = _plain_forward(*args, **kwargs)
+		if isinstance(out, tuple):
+			return tuple(o.float() if torch.is_tensor(o) else o for o in out)
+		return out.float()
+	network.forward = _amp_forward
+scaler = torch.amp.GradScaler('cuda', enabled=opts.amp)
+if hasattr(torch, 'compile') and not opts.no_compile:
 	print("Compiling model (this may take a minute at start)...")
 	# 'reduce-overhead' uses CUDA graphs which is super fast for small batches (CIFAR)
 	try:
@@ -272,7 +317,7 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 				total_likelihood += float(likelihood)
 				# Same objective as validation (P1-4): both include likelihood_std, so model
 				# selection compares like with like instead of a train loss that is missing a term.
-				loss = likelihood + weighted_kl + likelihood_std
+				loss = likelihood + weighted_kl + likelihood_std_weight*likelihood_std
 				
 			if net_config["task"] == "classification": 
 				#accuracy calculated as a mean of the batch
@@ -293,12 +338,16 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 
 			total_loss += float(loss.detach())
 
-			optimizer.zero_grad()
 			if multi_gpu:
 				fabric.backward(loss)
+				optimizer.step()
+				optimizer.zero_grad()
 			else:
-				loss.backward()
-			optimizer.step()
+				scaler.scale(loss / opts.grad_accum).backward()
+				if (step + 1) % opts.grad_accum == 0 or step + 1 == len(train_loader):
+					scaler.step(optimizer)
+					scaler.update()
+					optimizer.zero_grad()
 			
 		metrics["Train Time"] = time.time()-epoch_time
 		metrics['Train Loss'] = total_loss/(step + 1)
@@ -394,7 +443,7 @@ def train_single_fold(network, train_loader, val_loader, optimizer, output_path,
 						weighted_kl = kl_weight.get_weight(step, epoch)*kl
 						total_weighted_kl += float(weighted_kl)
 						total_likelihood += float(likelihood)
-						loss = likelihood + weighted_kl + likelihood_std
+						loss = likelihood + weighted_kl + likelihood_std_weight*likelihood_std
 
 					if net_config["task"] == "classification": 
 						#accuracy calculated as a mean of the batch

@@ -37,7 +37,7 @@ bayes_config = config["Training"]["Bayesian Parameters"]
 pbayes_config = config["Training"]["Partial Bayesian Parameters"]
 lbayes_config = config["Training"]["Layer Bayesian Parameters"]
 criterion = utils.get_loss_func(train_config["loss_func"], label_smoothing=0, dataset=data_config["dataset"]) #compute loss based on 0 label smoothing
-nll_loss = True if train_config["loss_func"] == "nll_loss" else False
+nll_loss = train_config["loss_func"].upper() == "NLL"  # match get_loss_func (P1-9; train.py fixed in b0c35cf)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 #######################################################################################################
