@@ -31,6 +31,10 @@ SHATHA_HANDOFF.md
 SHATHA_NOTE_*.md
 S2_PAPER_PROPOSAL.md
 S2_EXECUTION_TODO.md
+S2_DATASET_SURVEY.md
 splits/*_report.md
 datasets_*/
 uncertaintyNet-main/log_runs.csv
+
+# Versioned run outputs (trees/output_v0.2, ...)
+output_*/
