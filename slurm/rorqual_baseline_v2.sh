@@ -40,3 +40,11 @@ for run in resnet50_det resnet50_vll_std resnet50_vll_elbo; do
 done
 python eval/baseline_report.py --out "eval/output/$TAG" \
   --runs det="$TAG/resnet50_det/run" vll_std="$TAG/resnet50_vll_std/run" vll_elbo="$TAG/resnet50_vll_elbo/run"
+
+# S1-4: per-image uncertainty + agreement/deferral table (adds S1's binary tree if its predictions exist)
+U=uncertaintyNet-main/output/$TAG
+RUNS=(det="$U/resnet50_det/run/predictions.csv" vll_std="$U/resnet50_vll_std/run/predictions.csv"
+      vll_elbo="$U/resnet50_vll_elbo/run/predictions.csv")
+TREE=trees/output/s1_binary_v0.2/tree_predictions.csv
+[ -f "$TREE" ] && RUNS+=(tree="$TREE")
+python eval/uncertainty_table.py --primary det --runs "${RUNS[@]}" --out "eval/output/$TAG/uncertainty"
