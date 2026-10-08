@@ -36,8 +36,6 @@ PHRASES = {
     "C_darkness_vs_skin": ("pigmentation relative to surrounding skin", "dark", "light"),
     "C_redness_vs_skin": ("redness relative to surrounding skin", "marked", "slight"),
     "C_yellowness_vs_skin": ("yellow tone relative to surrounding skin", "marked", "slight"),
-    "D_feret_rel": ("size in the frame (not calibrated to mm)", "large", "small"),
-    "D_area_rel": ("area in the frame (not calibrated to mm)", "large", "small"),
     "T_glcm_contrast": ("surface texture contrast", "high", "low"),
     "T_glcm_homogeneity": ("surface texture", "smooth", "heterogeneous"),
     "T_glcm_energy": ("texture uniformity", "uniform", "non-uniform"),
@@ -45,7 +43,7 @@ PHRASES = {
     "T_glcm_entropy": ("texture complexity", "complex", "simple"),
     "T_lbp_entropy": ("micro-texture variety", "varied", "uniform"),
     "T_lbp_flat_fraction": ("flat micro-texture", "prevalent", "sparse"),
-    "T_roughness": ("surface roughness (scale/crust)", "rough", "smooth"),
+    "T_roughness": ("fine-scale surface texture", "rough", "smooth"),   # not validated as scale/crust (MONET rho 0.15)
     "S_eccentricity": ("elongation", "elongated", "round"),
     "S_solidity": ("compactness of the shape", "compact", "lobulated"),
     "S_extent": ("fill of the bounding box", "compact", "spread out"),
@@ -113,3 +111,29 @@ def render(payload, entropy_threshold):
     limitations = ("Features are computed from an automatic lesion outline on a clinical photograph; size is "
                    "relative to the frame, not in millimetres, and evolution cannot be assessed from one image.")
     return Explanation(summary, reasons, " ".join(notes), limitations, hedges)
+
+
+def render_llm_input(inp):
+    """Template baseline on the number-free LLM input (llm_input.build): same facts the LLM gets, fixed wording.
+    This is the no-LLM arm compared with every prompt strategy (T6.6)."""
+    pred = inp["prediction"]
+    against = any(e["direction"] == "argues_against" for e in inp["evidence"])
+    summary = f"The model predicts {pred} with {inp['confidence']} confidence."
+    if against:
+        summary += " The evidence is mixed."
+    notes = []
+    if inp["uncertain"]:
+        notes.append("The model is uncertain about this case and it should be reviewed by a clinician.")
+    if not inp["surrogate_agrees"]:
+        notes.append("The interpretable model does not reproduce this prediction, so the reasons may not reflect "
+                     "what drove it.")
+    if not inp["segmentation_reliable"]:
+        notes.append("The automatic lesion outline may be inaccurate.")
+    reasons = []
+    for e in inp["evidence"]:
+        verb = "supports" if e["direction"] == "supports" else "argues against"
+        reasons.append({"feature_id": e["feature_id"], "direction": e["direction"],
+                        "text": f"{e['measure'].capitalize()} is {e['finding']} ({e['relative_to_benign']}); "
+                                f"this {e['strength']}ly {verb} the {pred} prediction."})
+    return {"summary": summary, "reasons": reasons, "uncertainty_note": " ".join(notes),
+            "limitations": " ".join(inp["limitations"])}
