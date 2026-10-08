@@ -46,7 +46,7 @@ def main(opts):
     out = Path(opts.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    split = pd.read_csv(ROOT / "splits" / "isic_clinical_v1.csv")
+    split = pd.read_csv(ROOT / "splits" / opts.split)
     ids = split.loc[split.split != "excluded", "isic_id"].tolist()
     rows = []
     for n, isic_id in enumerate(ids, 1):
@@ -71,4 +71,5 @@ if __name__ == "__main__":
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--images", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--split", default="isic_clinical_v2.csv", help="file name under splits/")
     main(ap.parse_args())

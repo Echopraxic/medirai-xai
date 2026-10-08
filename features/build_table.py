@@ -2,12 +2,12 @@
 Build the versioned feature table (one row per isic_id) from images + lesion masks.
 
 Columns: isic_id, split, label, diagnosis_3, ova_class, attribution, mask_quality (+ mask QA stats),
-feature_version, then the <GROUP>_<name> feature columns. Images whose mask fails to give a usable
+feature_version, frame_* QA columns (not modelled), then the <GROUP>_<name> feature columns. Images whose mask fails to give a usable
 lesion get NaN features and extraction_error set; they stay in the table so nothing is silently dropped.
 
     python features/build_table.py --images uncertaintyNet-main/datasets_768/ISIC_clinical \
         --masks uncertaintyNet-main/datasets_768/ISIC_clinical_masks/unet \
-        --quality segmentation/output/qa/mask_quality.csv --out features/output/feature_table_v0.1.parquet
+        --quality segmentation/output/qa/mask_quality.csv --out features/output/feature_table_v0.2.parquet
 """
 import argparse
 import hashlib
@@ -50,7 +50,7 @@ def one(job):
 
 
 def main(opts):
-    split = pd.read_csv(ROOT / "splits" / "isic_clinical_v1.csv")
+    split = pd.read_csv(ROOT / "splits" / opts.split)
     split = split[split.split != "excluded"].reset_index(drop=True)
     jobs = [(i, Path(opts.images) / f"{i}.jpg", Path(opts.masks) / f"{i}.png") for i in split.isic_id]
     with ProcessPoolExecutor(opts.workers) as ex:
@@ -73,10 +73,11 @@ def main(opts):
     dictionary = pd.DataFrame([{"feature": k, "group": v[0], "concept": fx.CONCEPT_GROUPS[v[0]], "units": v[1],
                                 "meaning": v[2], "version": fx.FEATURE_VERSION} for k, v in fx.FEATURE_DICTIONARY.items()])
     dictionary.to_csv(out.with_name(f"feature_dictionary_{fx.FEATURE_VERSION}.csv"), index=False)
-    manifest = {"feature_version": fx.FEATURE_VERSION, "work_side": fx.WORK_SIDE, "n_rows": len(table),
+    manifest = {"feature_version": fx.FEATURE_VERSION, "lesion_side": fx.LESION_SIDE,
+                "crop_margin": fx.CROP_MARGIN, "shades_of_gray_p": fx.SOG_P, "split": opts.split, "n_rows": len(table),
                 "n_features": len(feature_cols), "n_errors": int((table.extraction_error.fillna("") != "").sum()),
                 "masks": str(opts.masks), "images": str(opts.images),
-                "split_sha256_16": hashlib.sha256((ROOT / "splits" / "isic_clinical_v1.csv").read_bytes()).hexdigest()[:16],
+                "split_sha256_16": hashlib.sha256((ROOT / "splits" / opts.split).read_bytes()).hexdigest()[:16],
                 "extract_py_sha256_16": hashlib.sha256(Path(fx.__file__).read_bytes()).hexdigest()[:16]}
     out.with_suffix(".json").write_text(json.dumps(manifest, indent=1))
     print(json.dumps(manifest, indent=1))
@@ -88,5 +89,6 @@ if __name__ == "__main__":
     ap.add_argument("--masks", required=True)
     ap.add_argument("--quality", default=None)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--split", default="isic_clinical_v2.csv", help="file name under splits/")
     ap.add_argument("--workers", type=int, default=6)
     main(ap.parse_args())

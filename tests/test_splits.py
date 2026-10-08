@@ -62,3 +62,18 @@ def test_connected_groups_merges_through_shared_patient():
     g = connected_groups(df)
     assert g[0] == g[1] == g[2]          # L1 ~ P1 ~ L2
     assert len({g[0], g[3], g[4]}) == 3  # unlinked images stay separate
+
+
+def test_v2_only_excludes_mskcc_and_never_moves_images(split):
+    """isic_clinical_v2 (2026-10-07) = v1 with MSKCC excluded; no image may change train/val/test."""
+    from make_split_v2 import build_v2
+    meta = pd.read_csv(META, low_memory=False)
+    v2 = build_v2(split, meta)
+    on_disk = pd.read_csv(ROOT / "splits" / "isic_clinical_v2.csv")
+    assert v2[["isic_id", "split"]].equals(on_disk[["isic_id", "split"]])
+    both = split.merge(v2, on="isic_id", suffixes=("_v1", "_v2"))
+    moved = both[(both.split_v1 != both.split_v2)]
+    assert (moved.split_v2 == "excluded").all()
+    assert (moved.attribution_v1 == "Memorial Sloan Kettering Cancer Center").all()
+    assert not ((v2.source == "MSKCC") & (v2.split != "excluded")).any()
+    assert (v2.loc[v2.split == "excluded", "exclusion_reason"] != "").all()

@@ -131,18 +131,20 @@ def main(opts):
     }
     report["fidelity"] = {name: fidelity_table(test, f"{name}_pred")
                           for name in ("binary_gt", "binary_surrogate", "ova")}
-    # does the feature set encode the image source? Compare MSKCC benign lesions with other benign lesions
-    # only: MSKCC is 99.5% benign, so on all lesions "predict MSKCC" would just pick up the benign signal.
-    benign = df.label == 0
-    src = (df.source == "MSKCC").astype(int)
-    m_src, _, _ = fit_tuned(tr.loc[benign[train_mask], feats], src[train_mask & benign],
-                            va.loc[benign[val_mask], feats], src[val_mask & benign])
-    test_b = test[test.label == 0]
-    report["source_shortcut_check"] = {
-        "auroc_MSKCC_vs_other_benign_test": float(roc_auc_score(test_b.source == "MSKCC",
-                                                                 m_src.predict_proba(test_b[feats])[:, 1])),
-        "n_test_benign": len(test_b),
-        "note": "benign-only; high AUROC = features identify the MSKCC source (99.5% benign) beyond lesion type"}
+    # does the feature set encode the image source beyond lesion type? Within one diagnosis, predict UFES vs
+    # MILK (split v2 has no MSKCC). Sources also differ in population, so ~0.5 is not expected; the number is
+    # reported so a rise between feature versions is caught.
+    report["source_shortcut_check"] = {"note": "UFES vs MILK within one diagnosis; train->test AUROC"}
+    for dx in ("Basal cell carcinoma", "Nevus", "Seborrheic keratosis"):
+        same = df.diagnosis_3.eq(dx) & df.source.isin(["MILK", "UFES"])
+        src = (df.source == "UFES").astype(int)
+        trm, vam, tem = train_mask & same, val_mask & same, same & usable & (df.split == "test")
+        if src[tem].nunique() < 2 or src[trm].nunique() < 2:
+            continue
+        m_src, _, _ = fit_tuned(df.loc[trm, feats], src[trm], df.loc[vam, feats], src[vam])
+        report["source_shortcut_check"][dx] = {
+            "auroc": float(roc_auc_score(src[tem], m_src.predict_proba(df.loc[tem, feats])[:, 1])),
+            "n_test": int(tem.sum())}
 
     keep = ["isic_id", "split", "label", "ova_class", "source", "mask_quality", "resnet_pred", "resnet_p_malignant",
             "entropy_of_expected", "binary_gt_p", "binary_gt_pred", "binary_surrogate_p", "binary_surrogate_pred",
