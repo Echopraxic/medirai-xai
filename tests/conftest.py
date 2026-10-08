@@ -44,6 +44,11 @@ for name in OPTIONAL:
         sys.modules[name] = stub
         STUBBED.add(top)
 
+# Recent matplotlib asks sys.modules["tensorflow"].is_tensor(x) for everything it plots; a MagicMock answers
+# truthy, so every number is "converted" to an array forever (RecursionError in plt.subplots).
+if "tensorflow" in STUBBED:
+    sys.modules["tensorflow"].is_tensor = lambda x: False
+
 for path in (NRC, UNC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))

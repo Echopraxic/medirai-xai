@@ -21,3 +21,12 @@ tqdm>=4.66
 requests>=2.31        # splits/fetch_isic_metadata.py, splits/check_images.py
 tabulate>=0.9         # split report tables (pandas.to_markdown)
 pytest>=8
+
+# Student 2 pipeline: features/, trees/, explain/, eval/, segmentation/
+scikit-image>=0.22    # features/extract.py, segmentation/
+pyarrow>=14           # parquet feature table (features/build_table.py) and SHAP values
+xgboost>=2.0          # trees/train_trees.py, trees/treeshap_top3.py
+shap>=0.44            # TreeSHAP (trees/treeshap_top3.py)
+grad-cam>=1.5         # pytorch_grad_cam (eval/gradcam_arm.py); pulls in opencv-python-headless
+# segmentation/sam_masks.py only (optional):
+#   pip install git+https://github.com/facebookresearch/segment-anything.git
