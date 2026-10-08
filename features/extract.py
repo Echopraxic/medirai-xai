@@ -1,22 +1,32 @@
 """
-Feature extraction v0: concept-aligned handcrafted lesion features (A/B/C/D, texture, shape).
+Feature extraction: concept-aligned handcrafted lesion features (A/B/C, texture, shape).
 
-Every image is first resampled to a common working size (longest side WORK_SIDE px) so features do not
-encode the source camera's resolution: in ISIC clinical close-ups resolution is nearly a proxy for the
-source (MSKCC images are all >2k px and 99.5% benign).
+v0.2 (2026-10-07) normalizes away the camera before measuring the lesion. On v0.1 the features identified the
+image source within a single diagnosis (BCC, nevus, SK: MILK vs UFES AUROC 0.95-0.97, mostly texture and
+color), because sources differ in resolution (MILK is fixed at 600 px; UFES 147-3,476 px), framing (UFES
+lesions fill ~2x more of the frame) and white balance. v0.2 therefore:
+  1. applies Shades-of-Gray color constancy (Finlayson & Trezzi 2004, p=6; standard for skin images) to the
+     whole photo;
+  2. crops around the lesion and resamples it so its max Feret diameter is LESION_SIDE px, so texture and
+     the skin ring are measured at the same scale per lesion, whatever the camera or framing;
+  3. moves the frame-relative size measures out of the concept groups (`frame_feret_rel`, `frame_area_rel`):
+     they describe how the photo was framed, not the lesion, so they are kept for QA but never modelled
+     or explained. There is no D (mm) feature: no calibration exists outside UFES.
 
 Feature names are <GROUP>_<name>; GROUP is the concept group used for SHAP grouping:
-  A asymmetry · B border · C color · D diameter · T texture/surface · S shape
+  A asymmetry · B border · C color · T texture/surface · S shape
 See FEATURE_DICTIONARY for units and direction. Thresholds that turn these into clinical words are NOT
-here (WS3); v0 values are unvalidated.
+here (concepts/, WS3).
 """
 import numpy as np
 from PIL import Image
 from scipy import ndimage
 from skimage import color, feature, measure
 
-FEATURE_VERSION = "v0.1"
-WORK_SIDE = 512
+FEATURE_VERSION = "v0.2"
+LESION_SIDE = 192   # lesion max Feret diameter after resampling (px); MILK lesions are ~175 px natively
+CROP_MARGIN = 0.35  # context kept around the lesion, as a fraction of its Feret diameter (skin ring needs ~0.2)
+SOG_P = 6           # Shades-of-Gray Minkowski norm
 
 # Reference colors for the dermoscopic ABCD color criterion (sRGB). Literature prototypes, not calibrated
 # for clinical photographs; C_n_colors and C_frac_* are therefore exploratory until WS3 validation.
@@ -31,10 +41,32 @@ COLOR_PROTOTYPES_RGB = {
 COLOR_MIN_FRACTION = 0.05  # a named color "is present" if it covers >= 5% of the lesion
 
 
-def to_work_size(img: np.ndarray, mask: np.ndarray):
-    h, w = mask.shape
-    scale = WORK_SIDE / max(h, w)
-    size = (max(1, round(w * scale)), max(1, round(h * scale)))
+def shades_of_gray(img: np.ndarray, p: int = SOG_P) -> np.ndarray:
+    """Color constancy: divide out the illuminant estimated as the per-channel Minkowski p-norm mean."""
+    x = img.astype(float) / 255.0
+    illum = np.power(np.mean(np.power(x, p), axis=(0, 1)), 1.0 / p)
+    gain = illum.mean() / np.maximum(illum, 1e-6)
+    return (np.clip(x * gain, 0, 1) * 255).round().astype(np.uint8)
+
+
+def frame_features(mask: np.ndarray) -> dict:
+    """How the photo is framed (QA only; not a lesion property, never used by the models)."""
+    props = measure.regionprops(mask.astype(np.uint8))[0]
+    return {"frame_feret_rel": float(props.feret_diameter_max / np.hypot(*mask.shape)),
+            "frame_area_rel": float(mask.mean())}
+
+
+def to_lesion_scale(img: np.ndarray, mask: np.ndarray):
+    """Crop around the lesion (with skin context) and resample so its max Feret diameter is LESION_SIDE px."""
+    props = measure.regionprops(mask.astype(np.uint8))[0]
+    feret = max(props.feret_diameter_max, 1.0)
+    pad = int(np.ceil(CROP_MARGIN * feret))
+    y0, x0, y1, x1 = props.bbox
+    y0, x0 = max(0, y0 - pad), max(0, x0 - pad)
+    y1, x1 = min(mask.shape[0], y1 + pad), min(mask.shape[1], x1 + pad)
+    img, mask = img[y0:y1, x0:x1], mask[y0:y1, x0:x1]
+    scale = LESION_SIDE / feret
+    size = (max(1, round(mask.shape[1] * scale)), max(1, round(mask.shape[0] * scale)))
     img = np.asarray(Image.fromarray(img).resize(size, Image.LANCZOS if scale < 1 else Image.BICUBIC))
     mask = np.asarray(Image.fromarray(mask.astype(np.uint8) * 255).resize(size, Image.NEAREST)) > 127
     return img, mask
@@ -141,13 +173,6 @@ def color_features(lab, mask):
     return out
 
 
-def diameter_features(mask):
-    props = measure.regionprops(mask.astype(np.uint8))[0]
-    diag = np.hypot(*mask.shape)
-    return {"D_feret_rel": float(props.feret_diameter_max / diag),
-            "D_area_rel": float(mask.mean())}
-
-
 def texture_features(lab, mask):
     L = lab[..., 0]
     ys, xs = np.nonzero(mask)
@@ -185,15 +210,16 @@ def shape_features(mask):
 
 def extract(img_rgb: np.ndarray, mask: np.ndarray) -> dict:
     """img_rgb: HxWx3 uint8; mask: HxW bool (single cleaned component). Returns {feature: value}."""
-    img, m = to_work_size(img_rgb, mask)
+    if mask.sum() < 30:
+        raise ValueError("mask too small")
+    out = frame_features(mask)
+    img, m = to_lesion_scale(shades_of_gray(img_rgb), mask)
     if m.sum() < 30:
         raise ValueError("mask too small after resampling")
     lab = color.rgb2lab(img / 255.0)
-    out = {}
     out.update(asymmetry_features(lab, m))
     out.update(border_features(lab, m))
     out.update(color_features(lab, m))
-    out.update(diameter_features(m))
     out.update(texture_features(lab, m))
     out.update(shape_features(m))
     return out
@@ -223,8 +249,6 @@ FEATURE_DICTIONARY = {
     "C_darkness_vs_skin": ("C", "L* units", "skin L* minus lesion L*; higher = darker than skin"),
     "C_redness_vs_skin": ("C", "a* units", "lesion a* minus skin a*; higher = redder (erythema)"),
     "C_yellowness_vs_skin": ("C", "b* units", "lesion b* minus skin b*"),
-    "D_feret_rel": ("D", "fraction of image diagonal", "max Feret diameter; NOT mm (no calibration)"),
-    "D_area_rel": ("D", "fraction of image", "lesion area share of the frame; depends on framing"),
     "T_glcm_contrast": ("T", "GLCM", "local L* contrast inside the lesion"),
     "T_glcm_homogeneity": ("T", "GLCM", "higher = smoother surface"),
     "T_glcm_energy": ("T", "GLCM", "higher = more uniform texture"),
@@ -245,5 +269,7 @@ FEATURE_DICTIONARY = {
     "S_extent": ("S", "0-1", "area / bounding-box area"),
     "S_axis_ratio": ("S", "0-1", "minor / major axis length"),
 }
-CONCEPT_GROUPS = {"A": "asymmetry", "B": "border", "C": "color", "D": "diameter", "T": "texture/surface",
-                  "S": "shape"}
+CONCEPT_GROUPS = {"A": "asymmetry", "B": "border", "C": "color", "T": "texture/surface", "S": "shape"}
+# Not lesion features: kept in the table for QA, excluded from models and explanations.
+FRAME_COLUMNS = {"frame_feret_rel": "max Feret diameter / image diagonal (depends on framing, not mm)",
+                 "frame_area_rel": "lesion share of the image area (depends on framing)"}

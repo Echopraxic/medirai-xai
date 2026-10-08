@@ -108,10 +108,44 @@ def test_dark_and_red_relative_to_skin():
     assert red["C_redness_vs_skin"] > dark["C_redness_vs_skin"]
 
 
-def test_diameter_is_relative_to_the_frame():
+def test_frame_size_is_qa_only():
+    """v0.2: frame-relative size describes framing, not the lesion, so it is kept out of the concept groups."""
     m = ellipse(100, 100)
     f = fx.extract(render(m), m)
-    assert f["D_feret_rel"] == pytest.approx(200 / np.hypot(400, 500), rel=0.05)
+    assert f["frame_feret_rel"] == pytest.approx(200 / np.hypot(400, 500), rel=0.05)
+    assert not any(k.startswith("D_") for k in f)
+    assert set(fx.FRAME_COLUMNS) <= set(f)
+
+
+def test_texture_does_not_depend_on_framing():
+    """Same lesion photographed filling 15% vs 60% of the frame (UFES vs MILK framing) -> same texture/color."""
+    rng = np.random.default_rng(0)
+    yy, xx = np.mgrid[:800, :800]
+    big = np.hypot(yy - 400, xx - 400) <= 240
+    tex = rng.normal(0, 12, (800, 800, 1))
+    img_big = np.clip(render(big, noise=0).astype(float) + tex * big[..., None], 0, 255).astype(np.uint8)
+    # the same photo zoomed out 4x: downsample the lesion and paste it into a wider skin field
+    small_img = np.asarray(fx.Image.fromarray(img_big).resize((200, 200), fx.Image.LANCZOS))
+    small_m = np.asarray(fx.Image.fromarray(big.astype(np.uint8) * 255).resize((200, 200), fx.Image.NEAREST)) > 127
+    canvas_img = np.empty((800, 800, 3), np.uint8)
+    canvas_img[:] = img_big[5, 5]
+    canvas_img[300:500, 300:500] = small_img
+    canvas_m = np.zeros((800, 800), bool)
+    canvas_m[300:500, 300:500] = small_m
+    fb, fs = fx.extract(img_big, big), fx.extract(canvas_img, canvas_m)
+    for k in ("C_darkness_vs_skin", "C_deltaE_vs_skin", "B_circularity", "S_eccentricity"):
+        assert fs[k] == pytest.approx(fb[k], rel=0.15, abs=0.05), k
+    assert fs["frame_area_rel"] < fb["frame_area_rel"] / 4
+
+
+def test_color_constancy_removes_a_global_cast():
+    """A blue-tinted copy of the same photo (different camera white balance) gives similar color features."""
+    m = ellipse(110, 110)
+    img = render(m)
+    tinted = np.clip(img.astype(float) * np.array([0.85, 0.95, 1.15]), 0, 255).astype(np.uint8)
+    f0, f1 = fx.extract(img, m), fx.extract(tinted, m)
+    for k in ("C_redness_vs_skin", "C_yellowness_vs_skin", "C_deltaE_vs_skin", "C_n_colors"):
+        assert f1[k] == pytest.approx(f0[k], rel=0.15, abs=1.5), k
 
 
 def test_rough_surface_has_more_texture(disc):
@@ -136,11 +170,11 @@ def test_features_do_not_depend_on_source_resolution():
     small, large = scaled_lesion(1), scaled_lesion(4)
     fs, fl = fx.extract(render(small), small), fx.extract(render(large), large)
     for k in ("A_shape_asym_major", "A_shape_asym_minor", "B_circularity", "B_convexity", "B_radial_cv",
-              "B_fractal_dim", "C_n_colors", "D_feret_rel", "S_eccentricity", "S_solidity", "S_axis_ratio"):
+              "B_fractal_dim", "C_n_colors", "frame_feret_rel", "S_eccentricity", "S_solidity", "S_axis_ratio"):
         assert fl[k] == pytest.approx(fs[k], rel=0.1, abs=0.02), k
 
 
 def test_every_feature_is_in_the_dictionary(disc):
-    assert set(disc) == set(fx.FEATURE_DICTIONARY)
+    assert set(disc) == set(fx.FEATURE_DICTIONARY) | set(fx.FRAME_COLUMNS)
     assert {v[0] for v in fx.FEATURE_DICTIONARY.values()} <= set(fx.CONCEPT_GROUPS)
     assert all(k.split("_")[0] == v[0] for k, v in fx.FEATURE_DICTIONARY.items())
