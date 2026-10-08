@@ -252,6 +252,13 @@ def test_uncertaintynet_reads_persisted_split(tmp_path):
         dataset.load_split(data_dir=str(tmp_path))  # empty image folder -> clear error, not a silent skip
 
 
+def test_relative_split_file_resolves_from_any_cwd(tmp_path, monkeypatch):
+    import dataset
+    monkeypatch.chdir(tmp_path)  # export_predictions.py runs from the repo root, train.py from uncertaintyNet-main
+    df = dataset.load_split("../splits/isic_clinical_v2.csv")
+    assert len(df) == 6743 and set(df["split"]) == {"train", "val", "test"}
+
+
 # --------------------------------------------------------------------------- learning-curve subsampling (S2)
 def test_train_subsample_keeps_whole_groups_and_label_balance():
     import dataset
