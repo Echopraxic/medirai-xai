@@ -7,7 +7,7 @@
 - Month 2 = W5–8 (Oct 19 – Nov 15)
 - Month 3 = W9–12 (Nov 16 – Dec 13)
 - Month 4 = W13–17 (Dec 14 – Jan 20). It includes the Polytechnique holiday closure (~Dec 23 – Jan 5), so plan roughly three working weeks.
-**Last updated:** 2026-10-02
+**Last updated:** 2026-10-07
 
 Legend for owners: **S2** = Student 2 (me) · **S1** = Student 1 · **M** = MedirAI · **A** = Academic supervisor / admin. Dependency IDs (S1-x, M-x, A-x) are defined in §6.
 
@@ -139,8 +139,8 @@ Status: ☐ not started · ◐ in progress · ☑ done
 ### WS1: Shared feature layer (co-owned with S1) (M1 W3 → M2 W6)
 
 - ☐ **T1.1** Agree on the feature schema with S1 (→ S1-2). One row per `isic_id` with columns `split`, labels, `mask_quality`, then the feature columns. Store as versioned parquet.
-- ◐ **T1.2** Masks: get segmentation masks for the clinical close-ups (→ M-3). Apply the convex-hull cleanup from the NRC work (largest contour → hull). Compute a **mask-quality flag** (area ratio, border touching, confidence/uncertainty if Aloys's UNet provides it). Prior report: segmentation models "don't work with real (uncropped) images". *2026-10-02: v0 masks for all 7,983 images: ResNet18-UNet trained on ISIC 2018 (test Dice 0.894) + zero-shot SAM second opinion → ok/review/fail flag. Only ~51% ok/review: the dermoscopy-trained UNet over-segments small or faint clinical lesions. No convex hull (it erases border irregularity). Next: adapt to clinical photos with UNet–SAM agreement pseudo-labels; M-3 weights still wanted.*
-- ◐ **T1.3** Implement **concept-aligned** feature families. Start from `extract_features.py` and fix it where needed: *2026-10-02: v0.1 = 44 features (A/B/C/D, texture, shape) at a common 512-px working size. Frame-relative D features let the features identify the MSKCC source (benign-only AUROC 0.90); v0.2 removes them.*
+- ◐ **T1.2** Masks: get segmentation masks for the clinical close-ups (→ M-3). Apply the convex-hull cleanup from the NRC work (largest contour → hull). Compute a **mask-quality flag** (area ratio, border touching, confidence/uncertainty if Aloys's UNet provides it). Prior report: segmentation models "don't work with real (uncropped) images". *2026-10-02: v0 masks for all 7,983 images: ResNet18-UNet trained on ISIC 2018 (test Dice 0.894) + zero-shot SAM second opinion → ok/review/fail flag. Only ~51% ok/review: the dermoscopy-trained UNet over-segments small or faint clinical lesions. No convex hull (it erases border irregularity). Next: adapt to clinical photos with UNet–SAM agreement pseudo-labels; M-3 weights still wanted. 2026-10-07: gold set of 100 split-v2 test images (55 MILK / 45 UFES, stratified by flag and label, tune/report halves) + annotation tool (`segmentation/gold_select.py`, `segmentation/annotate.py`); S2 annotating.*
+- ◐ **T1.3** Implement **concept-aligned** feature families. Start from `extract_features.py` and fix it where needed: *2026-10-02: v0.1 = 44 features (A/B/C/D, texture, shape) at a common 512-px working size. 2026-10-07: v0.2 = 42 features: Shades-of-Gray color constancy, lesion-scale resampling (Feret = 192 px), frame-relative size moved out of the model (`frame_*`, QA only). Correction: the MSKCC shortcut was color/texture, not D. Within one diagnosis, features still separate UFES from MILK (AUROC 0.86–0.91, mostly color: population and photography); reported per source.*
   - **A (asymmetry):** mask flip overlap about both principal axes, not just horizontal; color asymmetry across halves.
   - **B (border):** circularity, fractal dimension, convexity defects, border gradient sharpness (abrupt vs. fading edge).
   - **C (color):** count of clinically named colors (light/dark brown, black, blue-gray, red, white) in a perceptual space (CIELAB) instead of CSS3 nearest-name; color variance/entropy.
@@ -149,7 +149,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
   - **Shape:** Hu moments, eccentricity, solidity.
   - Optional: PCA components of ResNet50 penultimate embeddings (→ S1-6).
 - ☑ **T1.4** Unit tests on synthetic shapes and masks (a known-symmetric disc, a known number of colors) so every feature behaves as named. *2026-10-02: `tests/test_features.py` (symmetric disc, rotated ellipse, star border, two-color lesion, rough surface, resolution invariance).*
-- ◐ **T1.5** Run on the full dataset on GCP → **feature table v1** plus a **feature dictionary** (name, concept group, units, direction meaning, valid range, extraction version). *(D1)* *2026-10-02: feature table v0.1 + dictionary + manifest built locally (329 failed-mask rows kept with an error flag); v1 after S1 review.*
+- ◐ **T1.5** Run on the full dataset on GCP → **feature table v1** plus a **feature dictionary** (name, concept group, units, direction meaning, valid range, extraction version). *(D1)* *2026-10-02: feature table v0.1 + dictionary + manifest built locally (329 failed-mask rows kept with an error flag); v1 after S1 review. 2026-10-07: v0.2 on split v2 (6,743 rows, 85 errors).*
 
 ### WS2: One-vs-all tree models, TreeSHAP, top-3 selection (M1 W3 → M2 W8)
 
@@ -157,7 +157,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
 - ☑ **T2.2** Train XGBoost/LightGBM one-vs-all models on the S1 split. Use class weights, tune on val only, and report per-class AUROC/F1. *2026-10-02 (v0): XGBoost, val-tuned; one-vs-all test AUROC 0.77 (SCC) to 0.87 (nevus, melanoma); macro-F1 0.44.*
 - ☑ **T2.3** Compute TreeSHAP (`shap.TreeExplainer`, exact). Choose and document interventional vs. tree-path-dependent. Explain in log-odds space. *2026-10-02: tree_path_dependent, log-odds of malignant, signed toward ResNet50's predicted class.*
 - ☑ **T2.4** **Concept grouping:** sum SHAP within each concept group (A, B, C, D, texture, shape, embedding) so correlated features don't fill all three slots. Rank concepts for the **predicted class**. Keep the top-3 with sign and magnitude bucket (strong/moderate/weak). *2026-10-02: grouped top-3 with strength tertiles fixed on val; most-cited groups color 29%, border 24%, size-in-frame 23%.*
-- ◐ **T2.5** **Surrogate fidelity (critical).** Measure agreement between the tree prediction and the ResNet50 prediction (→ S1-3). Compare two variants: tree trained on **ground truth** vs. tree trained on **ResNet50's predicted labels** (a true surrogate of ResNet50). Pick based on fidelity (C1), and flag low-agreement cases in the explanation. *2026-10-02 (provisional): surrogate trained on ResNet50 labels = 84.9% agreement (benign 77%, malignant 91%) vs 82.0% for the ground-truth tree, so the surrogate is used; just under C1. 70% agreement on ResNet50-wrong cases.*
+- ◐ **T2.5** **Surrogate fidelity (critical).** Measure agreement between the tree prediction and the ResNet50 prediction (→ S1-3). Compare two variants: tree trained on **ground truth** vs. tree trained on **ResNet50's predicted labels** (a true surrogate of ResNet50). Pick based on fidelity (C1), and flag low-agreement cases in the explanation. *2026-10-02 (provisional): surrogate trained on ResNet50 labels = 84.9% agreement (benign 77%, malignant 91%) vs 82.0% for the ground-truth tree, so the surrogate is used; just under C1. 70% agreement on ResNet50-wrong cases. 2026-10-07 (v0.2, split v2 test, n=1,341): 85.5% (benign 74%, malignant 90%), 71% on ResNet50-wrong cases; ResNet50 AUROC without MSKCC is 0.81.*
 - ☑ **T2.6** Stability: check that the top-3 is stable across seeds and bootstrap resamples (Jaccard of top-3 sets). Report it. *2026-10-02: mean top-3 Jaccard 0.76 across 5 bootstrap refits.*
 - ☐ **T2.7** Cross-check with S1's binary tree model and its TreeSHAP (→ S1-5). Where the malignant-vs-benign drivers disagree with the one-vs-all drivers, document why. *(D2)*
 
@@ -167,10 +167,10 @@ Status: ☐ not started · ◐ in progress · ☑ done
   - one entry per concept group, with graded phrases (e.g., asymmetry: "symmetric / asymmetric in one axis / asymmetric in two axes"; border: "regular / mildly irregular / markedly irregular"; color: "one color / two colors / multicolored, including blue-gray");
   - a definition of each term;
   - its ABCD or clinical relevance.
-- ☐ **T3.2** **Calibrate the thresholds with data, not by hand:**
+- ◐ **T3.2** **Calibrate the thresholds with data, not by hand:** *2026-10-07: interim phrase bank v0 = benign-percentile bands (`explain/llm_input.py`); data-calibrated grades pending Derm7pt/PH2.*
   - fit cut-points against labeled datasets: ENHANCE A/B/C scores (ISIC2017 + PH2), PH2 expert asymmetry and colors, Derm7pt criteria, and SLICE-3D metadata (border jaggedness, color variation, `clin_size_long_diam_mm`);
   - where no labels exist, use percentiles of the benign reference distribution.
-- ☐ **T3.3** **Validate** each concept (C2): agreement between our computed concept grade and the expert labels. Drop or flag concepts that don't reach the target. Note the domain shift (these sets are dermoscopic; our main set is clinical close-ups).
+- ◐ **T3.3** **Validate** each concept (C2): agreement between our computed concept grade and the expert labels. Drop or flag concepts that don't reach the target. Note the domain shift (these sets are dermoscopic; our main set is clinical close-ups). *2026-10-07 (`concepts/`): ENHANCE crowd labels (ISIC 2017, GT masks), each scored against the same mean of other raters: asymmetry features 0.39 vs a human rater 0.38; color 0.34 vs 0.12; border raters agree at 0.01, so border cannot be validated on ENHANCE. Clinical domain, MILK10k MONET scores: pigmentation ρ 0.69; erythema, vessels, ulceration/crust ≤ 0.16, so those clinical words are banned from the phrase bank. Proposal: C2 relative to inter-rater agreement (A-4).*
 - ☐ **T3.4** Embedding features, only if used: build an intermediate mapping from important embedding dimensions to known patterns, for example:
   - probing classifiers trained on Derm7pt criteria, or
   - concept activation vectors (TCAV-style), or
@@ -180,25 +180,25 @@ Status: ☐ not started · ◐ in progress · ☑ done
 
 ### WS4: LLM setup and input structuring (M1 W3 → M2 W6)
 
-- ☐ **T4.1** Shortlist models: Llama 3.x 8B Instruct and Mistral 7B Instruct (grant), plus optionally a biomedical-tuned variant. Check the licenses for commercial use (→ M-8). Serve locally on GCP (vLLM or HF transformers) so no data leaves MedirAI infrastructure.
-- ☐ **T4.2** Define the **input JSON schema**. It contains:
+- ◐ **T4.1** Shortlist models: *2026-10-07: Mistral-7B-Instruct-v0.3 and Qwen2.5-7B-Instruct (both Apache-2.0, ungated) served with vLLM on Rorqual H100; Llama-3.1-8B optional (gated licence).* Llama 3.x 8B Instruct and Mistral 7B Instruct (grant), plus optionally a biomedical-tuned variant. Check the licenses for commercial use (→ M-8). Serve locally on GCP (vLLM or HF transformers) so no data leaves MedirAI infrastructure.
+- ☑ **T4.2** Define the **input JSON schema**. *2026-10-07: `explain/llm_input.py` (`llm_input_v1`): number-free; findings, benign-relative bands, confidence category, uncertainty flag, surrogate agreement, segmentation reliability; S_hu moments marked not clinically mapped.* It contains:
   - the prediction and probability;
   - the uncertainty/deferral status and reason (from S1-4, e.g., "models disagreed", "high entropy");
   - surrogate agreement;
   - the top-3 concepts, each with phrase, direction ("supports malignant" / "argues against"), strength, and `feature_id`;
   - the target audience.
   It must never contain images, metadata, or identifiers.
-- ☐ **T4.3** Define the **output JSON schema**: `summary`, `reasons[] {text, feature_id, direction}`, `uncertainty_note`, `limitations`. Add constrained decoding or a JSON grammar if the serving stack supports it.
+- ☑ **T4.3** Define the **output JSON schema**: *2026-10-07: `OUTPUT_SCHEMA`, enforced with vLLM JSON-schema decoding.* `summary`, `reasons[] {text, feature_id, direction}`, `uncertainty_note`, `limitations`. Add constrained decoding or a JSON grammar if the serving stack supports it.
 - ☑ **T4.4** Build a **template baseline (no LLM)** that turns the same JSON into fixed sentences. It serves as the lower bound and the fallback. *2026-10-02: `explain/template.py`; every reason cites a feature_id; uncertainty, surrogate disagreement and mixed evidence always stated.*
 
 ### WS5: Prompting strategies (M2 W7 → M3 W10)
 
-- ☐ **T5.1** Implement strategies:
+- ◐ **T5.1** Implement strategies: *2026-10-07: (a) `zs_v1` and (c) `cite_v1` in `explain/prompts/`; (b) few-shot and (d) GP variant pending.*
   - **(a)** zero-shot structured prompt;
   - **(b)** few-shot, with care, because examples were copied verbatim in prior work;
   - **(c)** "cite-your-feature" prompt requiring a `feature_id` per claim;
   - **(d)** audience variants (dermatologist vs. GP; confirm the target with M-5).
-- ☐ **T5.2** Protocol, following "Reproducible Prompt Testing":
+- ◐ **T5.2** Protocol, following "Reproducible Prompt Testing": *2026-10-07: greedy decoding, seed 0; every run logs model + revision, prompt version + hash, decoding, input hashes (`explain/llm_generate.py`).*
   - explore with fixed-seed, low-temperature sampling or beams;
   - evaluate with fully deterministic decoding;
   - fixed eval set;
@@ -213,7 +213,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
 
 ### WS6: Automated validation (M3 W9 → M4 W14)
 
-- ☐ **T6.1** **Verifier** (rule-based + NLI): grounding rate (C3), top-3 coverage, direction correctness (C4), invented-concept detection against the concept vocabulary, and the uncertainty-flag rule (C5).
+- ◐ **T6.1** **Verifier** (rule-based + NLI): *2026-10-07: rule-based part done (`explain/verifier.py`, negative-control tests); template arm passes 100% on 1,341 test cases. NLI pending.* grounding rate (C3), top-3 coverage, direction correctness (C4), invented-concept detection against the concept vocabulary, and the uncertainty-flag rule (C5).
 - ☐ **T6.2** **Counterfactual sensitivity:** perturb or swap input concepts, then check that the explanation changes accordingly and unchanged parts stay stable.
 - ☐ **T6.3** **Consistency:**
   - similar inputs (same top-3 concepts and directions) should produce semantically similar outputs;
@@ -224,7 +224,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
   - rubric: accuracy vs. input, coherence, clarity, clinical tone;
   - **calibrate the judge against human ratings** on ~50 samples (Spearman / κ) before trusting it at scale.
 - ◐ **T6.5** **Stratified sampling:** correct vs. incorrect × confident vs. deferred × class. Report every metric per stratum, including C6 (confident language on wrong cases). *2026-10-02: strata implemented in `eval/wrong_prediction_study.py`; error-detection AUROC: model entropy 0.74, explanation support 0.65, Grad-CAM 0.54.*
-- ☐ **T6.6** Compare: template baseline vs. each prompt strategy vs. each LLM. Report latency and GPU memory per explanation. *(D5)*
+- ◐ **T6.6** Compare: *2026-10-07: `explain/compare_runs.py`, run per job by `slurm/rorqual_llm.sh`.* template baseline vs. each prompt strategy vs. each LLM. Report latency and GPU memory per explanation. *(D5)*
 
 ### WS7: Clinician review (prep M1–M2, run M3, analyze M4)
 
@@ -243,8 +243,8 @@ Status: ☐ not started · ◐ in progress · ☑ done
 
 ### WS9: Dataset development (added 2026-10-02; MedirAI has no images yet, see M-4)
 
-- ◐ **T9.1** Assess the current data. *2026-10-02: 7,983 labelled ISIC clinical close-ups (7,582 lesions). Malignant is 71% BCC; melanoma 522 images (348 train); few benign mimics (SK 575, LPLK 135, solar lentigo 63, dermatofibroma 52); only 1,378 benign images biopsy-confirmed; Fitzpatrick V–VI ≈ 5% of the 2,457 with a recorded type. Learning curve (25/50/100% of training groups, 2 runs each): test accuracy 0.805 → 0.830 → 0.840, AUROC excluding MSKCC 0.788 → 0.805 → 0.836, i.e. about +2 points per doubling, not yet flat. BCC/SCC are saturated (~0.97); nevus and SK keep improving; melanoma falls (0.63 → 0.54) as more non-melanoma data is added, so melanoma needs targeted data and class weighting, not just volume. Train ≈ val accuracy at every size, so the current recipe (lr 1e-5, 11 epochs) under-fits; tune it before concluding how much data is needed.*
-- ☐ **T9.2** Check candidate public sources for licence, label provenance and overlap: MILK10k and PAD-UFES-20 (likely overlap with our MILK/UFES images), Derm7pt (melanoma-rich; also WS3), DDI (biopsy-proven, balanced skin tones; fairness test set), MED-NODE, Dermofit (paid; has lesion masks), Fitzpatrick17k and SLICE-3D (secondary). Dermoscopic sets only for pretraining.
+- ◐ **T9.1** Assess the current data. *2026-10-02: 7,983 labelled ISIC clinical close-ups (7,582 lesions). Malignant is 71% BCC; melanoma 522 images (348 train); few benign mimics (SK 575, LPLK 135, solar lentigo 63, dermatofibroma 52); only 1,378 benign images biopsy-confirmed; Fitzpatrick V–VI ≈ 5% of the 2,457 with a recorded type. Learning curve (25/50/100% of training groups, 2 runs each): test accuracy 0.805 → 0.830 → 0.840, AUROC excluding MSKCC 0.788 → 0.805 → 0.836, i.e. about +2 points per doubling, not yet flat. BCC/SCC are saturated (~0.97); nevus and SK keep improving; melanoma falls (0.63 → 0.54) as more non-melanoma data is added, so melanoma needs targeted data and class weighting, not just volume. Train ≈ val accuracy at every size, so the current recipe (lr 1e-5, 11 epochs) under-fits; tune it before concluding how much data is needed. 2026-10-07: the 1,240 MSKCC images (73 patients, 97% unbiopsied benign, dermoscopy-like contact images, many without a visible lesion) are excluded in `splits/isic_clinical_v2.csv` (v1 assignments unchanged; licence and label-confirmation columns added). v2 = 6,743 images, 1,962 benign.*
+- ◐ **T9.2** Check candidate public sources *2026-10-07: PAD-UFES-20 and MILK10k are already in our data. Priority: MRA-MIDAS (prospective, biopsied, iPhone 15/30 cm; needs Redivis account), Derm7pt (252 melanoma; form ready), DDI (fairness test set). MED-NODE downloaded (no licence stated; external test only). PH2 official link dead. SLICE-3D/Fitzpatrick17k not for training.* for licence, label provenance and overlap: MILK10k and PAD-UFES-20 (likely overlap with our MILK/UFES images), Derm7pt (melanoma-rich; also WS3), DDI (biopsy-proven, balanced skin tones; fairness test set), MED-NODE, Dermofit (paid; has lesion masks), Fitzpatrick17k and SLICE-3D (secondary). Dermoscopic sets only for pretraining.
 - ☐ **T9.3** De-duplicate every new source against the current data by lesion and patient (and near-duplicate image hashing) before use; new sources go into a new split version (`isic_clinical_v2`), never by re-splitting v1.
 - ☐ **T9.4** Datasheet for the assembled dataset: sources, licences, label provenance (histopathology vs clinical), class and skin-type balance, known confounds.
 
@@ -341,11 +341,16 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | 2026-10-01 | Lesion masks while M-3 is pending | S2 | **Decided:** own ResNet18-UNet on ISIC 2018 + zero-shot SAM agreement flag; masks not convex-hulled |
 | 2026-10-02 | Variational-layer loss (P1-4) | S1+S2 | Both objectives tested; results tie, and the posterior σ never moves at lr 1e-5 (P1-5). For S1 to decide |
 | 2026-10-02 | Explained model | S2 | Deterministic ResNet50 for Grad-CAM, surrogate fidelity and C6; variational results reported alongside |
+| 2026-10-07 | MSKCC images | S2 (+S1 to confirm) | **Decided:** excluded in split v2 (different modality and population); S1 re-baselines on v2 |
+| 2026-10-07 | Licence policy for new data | S2 | **Decided:** research/NC sources allowed; licence recorded per image; commercial-safe subset for MedirAI |
+| 2026-10-07 | Feature version | S2 | **Decided:** v0.2 (color constancy, lesion-scale texture, no frame-relative size in the model) |
+| 2026-10-07 | Explanation audience | S2 | **Decided (until M-5):** dermatologist, English; `audience` field kept for GP/French |
+| 2026-10-07 | C2 target | S2 → A-4 | **Proposed:** concept features must agree with the rater consensus at least as well as a single rater does; absolute ρ ≥ 0.5 is unreachable on non-expert labels (border raters agree at 0.01) |
 | — | Use ResNet50 embeddings as features? | S2+S1 | Open: only if the intermediate concept mapping is reliable (T3.4) |
 | — | Target reader and language of explanations | M | Open (M-5) |
 | 2026-10-02 | Proprietary MedirAI data in scope? | M | **Answered:** MedirAI has no images yet. We assemble the dataset ourselves from public sources (WS9) |
 | — | Ethics certification required? | A | Open (A-1) |
-| — | Generator LLM choice (Llama vs. Mistral) | S2+M | Open (T4.1, M-8) |
+| 2026-10-07 | Generator LLM choice | S2 | **Provisional:** Mistral-7B-Instruct-v0.3 + Qwen2.5-7B-Instruct (Apache-2.0); Llama optional pending M-8 |
 
 ---
 
