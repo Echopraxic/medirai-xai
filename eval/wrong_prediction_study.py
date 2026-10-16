@@ -56,7 +56,8 @@ def main(opts):
                          "entropy": pl["uncertainty"]["entropy_of_expected"], "surrogate_agrees": pl["surrogate_agrees"],
                          "net_support": float(np.sum(signed)), "n_supporting": int(np.sum(np.array(signed) > 0)),
                          "unanimous_support": bool(all(s > 0 for s in signed)),
-                         "confident_wording": len(exp.hedges) == 0, "flagged_uncertain": "uncertain" in exp.hedges})
+                         "confident_wording": len(exp.hedges) == 0, "flagged_uncertain": "uncertain" in exp.hedges,
+                         "flagged_independent": "independent_check_weak" in exp.hedges})
             texts.append({"isic_id": item["isic_id"], "label": item["label"], **pl, "explanation": exp.as_dict()})
     df = pd.DataFrame(rows)
     gc = pd.read_csv(opts.gradcam)
@@ -66,13 +67,15 @@ def main(opts):
     df["stratum"] = np.where(df.correct, "correct", "wrong") + "/" + np.where(df.uncertain, "uncertain", "confident")
 
     cols = ["surrogate_agrees", "net_support", "unanimous_support", "confident_wording", "flagged_uncertain",
+            "flagged_independent",
             "cam_in_lesion", "pointing_hit"] + [c for c in ("deletion_auc", "insertion_auc") if c in df]
     strata = df.groupby("stratum")[cols].mean().round(3)
     strata.insert(0, "n", df.groupby("stratum").size())
 
     wrong = (~df.correct).astype(int)
     detect = {"model entropy": df.entropy, "surrogate disagrees": (~df.surrogate_agrees).astype(int),
-              "template: low net support": -df.net_support, "Grad-CAM: low CAM-in-lesion": -df.cam_in_lesion}
+              "template: low net support": -df.net_support, "template: any caveat": (~df.confident_wording).astype(int),
+              "Grad-CAM: low CAM-in-lesion": -df.cam_in_lesion}
     if "deletion_auc" in df:
         detect["Grad-CAM: high deletion AUC"] = df.deletion_auc
     error_auroc = {k: float(roc_auc_score(wrong[v.notna()], v[v.notna()])) for k, v in detect.items()}

@@ -1,0 +1,7 @@
+{
+  "version": "hybrid_v1",
+  "mode": "reasons_only",
+  "strategy": "hybrid: the LLM writes only the reason sentences (cite-your-feature); summary, uncertainty/surrogate/outline caveats, mixed-evidence statement and limitations are generated in code",
+  "system": "You write the reason sentences of an explanation of a skin-lesion classifier's prediction for a {audience}. The summary, warnings and limitations are written separately; do not write any of them and do not add warnings of your own.\nYou are given the prediction and up to three evidence items. Write exactly one sentence per evidence item, in the given order. Each sentence must cite its item by copying feature_id and direction exactly, and must use only that item's measure, finding, relative_to_benign and strength. Say clearly whether the item supports or argues against the predicted class, matching its direction field: if direction is \"argues_against\", write \"argues against the <prediction> prediction\".\nStrict rules: no digits or numbers; no structures, colors, sizes, diagnoses, risk factors or advice that are not in the item; no treatment advice; do not sound more certain than the item's strength.\nOutput one JSON object only: {{\"reasons\": [{{\"feature_id\": str, \"direction\": \"supports\"|\"argues_against\", \"text\": str}}]}}.",
+  "user": "Prediction: {prediction}\nEvidence:\n{evidence_json}\n\nJSON:"
+}

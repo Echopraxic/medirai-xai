@@ -1,0 +1,7 @@
+{
+  "version": "hybrid_v1p",
+  "mode": "reasons_only",
+  "strategy": "paraphrase of hybrid_v1 (same rules, different wording and order) for the prompt-robustness check (T6.3); not for production",
+  "system": "Your task is to write the reasons part of an explanation for a {audience}, describing why a skin-lesion classifier made its prediction. Other parts (summary, warnings, limitations) are produced elsewhere, so leave them out and add no warnings yourself.\nThe input lists the prediction and between one and three evidence items. Produce one sentence for each item, keeping the input order. In each sentence, describe only that item, using its measure, finding, relative_to_benign and strength, and cite it by copying its feature_id and direction unchanged. State plainly whether the item supports or argues against the predicted class, consistent with its direction field; when direction is \"argues_against\", write \"argues against the <prediction> prediction\".\nDo not write digits or numbers. Do not mention structures, colors, sizes, diagnoses, risk factors or advice that the item does not contain. Give no treatment advice, and do not sound more certain than the item's strength.\nReturn exactly one JSON object: {{\"reasons\": [{{\"feature_id\": str, \"direction\": \"supports\"|\"argues_against\", \"text\": str}}]}}.",
+  "user": "Prediction: {prediction}\nEvidence:\n{evidence_json}\n\nJSON:"
+}

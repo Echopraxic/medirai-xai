@@ -12,6 +12,9 @@ thresholds that map values to clinical grades are not validated yet.
 from dataclasses import dataclass
 
 # feature -> (what is measured, wording when high, wording when low)
+# Phrase bank v1 (2026-10-10): terms whose clinical reading failed validation or was never tested use plain
+# image-property wording ("red tone", "image texture"), not clinical signs (erythema, scale, crust). Validation
+# status per term: concepts/phrase_bank.py -> concepts/output/phrase_bank_v1.csv.
 PHRASES = {
     "A_shape_asym_major": ("shape symmetry across the long axis", "asymmetric", "symmetric"),
     "A_shape_asym_minor": ("shape symmetry across the short axis", "asymmetric", "symmetric"),
@@ -24,7 +27,7 @@ PHRASES = {
     "B_edge_sharpness": ("edge transition to surrounding skin", "abrupt", "gradual"),
     "B_edge_sharpness_cv": ("edge definition along the border", "variable", "uniform"),
     "C_frac_white": ("share of white/pale areas", "high", "low"),
-    "C_frac_red": ("share of red areas", "high", "low"),
+    "C_frac_red": ("share of red-toned areas", "high", "low"),
     "C_frac_light_brown": ("share of light-brown areas", "high", "low"),
     "C_frac_dark_brown": ("share of dark-brown areas", "high", "low"),
     "C_frac_blue_gray": ("share of blue-gray areas", "high", "low"),
@@ -34,16 +37,16 @@ PHRASES = {
     "C_color_std": ("color variation", "high", "low"),
     "C_deltaE_vs_skin": ("color contrast with surrounding skin", "high", "low"),
     "C_darkness_vs_skin": ("pigmentation relative to surrounding skin", "dark", "light"),
-    "C_redness_vs_skin": ("redness relative to surrounding skin", "marked", "slight"),
-    "C_yellowness_vs_skin": ("yellow tone relative to surrounding skin", "marked", "slight"),
-    "T_glcm_contrast": ("surface texture contrast", "high", "low"),
-    "T_glcm_homogeneity": ("surface texture", "smooth", "heterogeneous"),
+    "C_redness_vs_skin": ("red tone relative to surrounding skin", "redder", "less red"),
+    "C_yellowness_vs_skin": ("yellow tone relative to surrounding skin", "more yellow", "less yellow"),
+    "T_glcm_contrast": ("image texture contrast", "high", "low"),
+    "T_glcm_homogeneity": ("image texture", "homogeneous", "heterogeneous"),
     "T_glcm_energy": ("texture uniformity", "uniform", "non-uniform"),
     "T_glcm_correlation": ("texture regularity", "regular", "irregular"),
     "T_glcm_entropy": ("texture complexity", "complex", "simple"),
     "T_lbp_entropy": ("micro-texture variety", "varied", "uniform"),
     "T_lbp_flat_fraction": ("flat micro-texture", "prevalent", "sparse"),
-    "T_roughness": ("fine-scale surface texture", "rough", "smooth"),   # not validated as scale/crust (MONET rho 0.15)
+    "T_roughness": ("fine-scale image texture", "coarse", "fine"),   # not scale/crust (MONET rho 0.14)
     "S_eccentricity": ("elongation", "elongated", "round"),
     "S_solidity": ("compactness of the shape", "compact", "lobulated"),
     "S_extent": ("fill of the bounding box", "compact", "spread out"),
@@ -53,6 +56,8 @@ for i in range(1, 8):
     PHRASES[f"S_hu{i}"] = (f"shape moment {i} (not clinically mapped)", "high", "low")
 
 HIGH_PCT, LOW_PCT = 75.0, 25.0
+INDEPENDENT_DOUBT_CUT = 0.34  # same rule as llm_input.INDEPENDENT_DOUBT_CUT (template imports nothing from it)
+INDEPENDENT_NOTE = ("An independent model based on the measured lesion features gives this prediction less support, so it should be reviewed with caution.")
 
 
 def ordinal(n: int) -> str:
@@ -96,13 +101,18 @@ def render(payload, entropy_threshold):
     hedges = []
     summary = f"The model predicts {pred} (probability of malignancy {p:.2f})."
     notes = []
-    if payload["uncertainty"]["entropy_of_expected"] > entropy_threshold:
+    flag = payload["uncertainty"].get("deferred")  # uncertainty-table flag, as llm_input.is_uncertain
+    if bool(flag) if flag is not None else payload["uncertainty"]["entropy_of_expected"] > entropy_threshold:
         notes.append("The model is uncertain about this case and it should be reviewed by a clinician.")
         hedges.append("uncertain")
     if not payload["surrogate_agrees"]:
         notes.append("The interpretable feature model does not reproduce this prediction, so the reasons below "
                      "may not reflect what drove it.")
         hedges.append("surrogate_disagrees")
+    p_pred = payload.get("feature_model_p_predicted")
+    if hedges[:1] != ["uncertain"] and p_pred is not None and (1 - p_pred) > INDEPENDENT_DOUBT_CUT:
+        notes.append(INDEPENDENT_NOTE)
+        hedges.append("independent_check_weak")
     reasons = [{"text": describe(r, pred), "feature_id": r["feature_id"], "direction": r["direction"]}
                for r in payload["top_concepts"]]
     if any(r["direction"] == "argues_against" for r in payload["top_concepts"]):
@@ -127,6 +137,8 @@ def render_llm_input(inp):
     if not inp["surrogate_agrees"]:
         notes.append("The interpretable model does not reproduce this prediction, so the reasons may not reflect "
                      "what drove it.")
+    if inp.get("independent_check_weak"):
+        notes.append(INDEPENDENT_NOTE)
     if not inp["segmentation_reliable"]:
         notes.append("The automatic lesion outline may be inaccurate.")
     reasons = []
