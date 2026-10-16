@@ -12,8 +12,8 @@ Outputs (in --out):
   importance.csv           mean |SHAP| on test, per feature and per concept group, with sign vs label
   report.json              val/test performance overall, per source and per one-vs-all class
 
-    python trees/s1_binary_tree.py --features features/output/feature_table_v0.2.parquet \
-        --out trees/output/s1_binary_v0.2
+    python trees/s1_binary_tree.py --features features/output/feature_table_v1.0.parquet \
+        --out trees/output/s1_binary_v1.0
 """
 import argparse
 import json
@@ -105,7 +105,7 @@ def main(opts):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--features", default=str(ROOT / "features/output/feature_table_v0.2.parquet"))
+    ap.add_argument("--features", default=str(ROOT / "features/output/feature_table_v1.0.parquet"))
     ap.add_argument("--split", default=str(ROOT / "splits/isic_clinical_v2.csv"))
-    ap.add_argument("--out", default=str(ROOT / "trees/output/s1_binary_v0.2"))
+    ap.add_argument("--out", default=str(ROOT / "trees/output/s1_binary_v1.0"))
     main(ap.parse_args())

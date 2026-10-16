@@ -178,3 +178,23 @@ def test_every_feature_is_in_the_dictionary(disc):
     assert set(disc) == set(fx.FEATURE_DICTIONARY) | set(fx.FRAME_COLUMNS)
     assert {v[0] for v in fx.FEATURE_DICTIONARY.values()} <= set(fx.CONCEPT_GROUPS)
     assert all(k.split("_")[0] == v[0] for k, v in fx.FEATURE_DICTIONARY.items())
+
+
+def test_quality_flag_v1_rules():
+    sys.path.insert(0, str(ROOT / "segmentation"))
+    from postprocess import quality_flag_v1
+    assert quality_flag_v1(0.10, 0.0, 0.9, 0.95) == "ok"
+    assert quality_flag_v1(0.10, 0.0, 0.9, 0.79) == "fail"      # low UNet confidence inside its own mask
+    assert quality_flag_v1(0.10, 0.0, 0.3, 0.95) == "fail"      # SAM disagrees
+    assert quality_flag_v1(0.001, 0.0, 0.9, 0.95) == "fail"     # (near) empty mask
+    assert quality_flag_v1(0.50, 0.0, 0.9, 0.95) == "review"    # large mask: often leaks into skin
+    assert quality_flag_v1(0.10, 0.5, 0.9, 0.95) == "review"    # touches the frame
+
+
+def test_unvalidated_feature_is_never_the_cited_reason():
+    import pandas as pd
+    sys.path.insert(0, str(ROOT / "trees"))
+    from treeshap_top3 import representative
+    contrib = pd.Series({"C_n_colors": 0.9, "C_color_entropy": 0.2, "C_frac_black": -0.1})
+    assert representative(contrib) == "C_color_entropy"
+    assert representative(pd.Series({"C_n_colors": 0.5})) == "C_n_colors"  # only member left: keep the group
