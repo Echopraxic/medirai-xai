@@ -219,7 +219,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
   - similar inputs (same top-3 concepts and directions) should produce semantically similar outputs;
   - outputs should be robust to prompt paraphrase;
   - the same input run repeatedly should give identical output.
-- ◐ **T6.4** **LLM-as-judge:** *2026-10-18: `explain/llm_judge.py` (claim labels supported / direction / unsupported concept / magnitude / other, plus uncertainty, overconfidence, clarity, tone; planted-error controls for recall and specificity; blinded 60-case rating sheet; judge-vs-human κ). Judges Gemma-3-27B-it and Llama-3.3-70B AWQ on the D5 base cases (`slurm/narval_llm_judge.sh`; Llama job 6206187 queued, Gemma waits for an HF token).*
+- ◐ **T6.4** **LLM-as-judge:** *2026-10-18: `explain/llm_judge.py` (claim labels supported / direction / unsupported concept / magnitude / other, plus uncertainty, overconfidence, clarity, tone; planted-error controls for recall and specificity; blinded 60-case rating sheet; judge-vs-human κ). Judges Gemma-3-27B-it and Llama-3.3-70B AWQ on the D5 base cases (`slurm/narval_llm_judge.sh`; Llama job 6206187 queued, Gemma waits for an HF token). Llama (6226589): planted-error recall 0.98–1.00 per type, specificity 0.79 on clean copies; most false alarms are benign-typical values that support malignant, which the judge overrides with its own clinical prior. Direction labels from the judge are therefore not used (consistent with H3).*
   - use a different model family from the generator;
   - rubric: accuracy vs. input, coherence, clarity, clinical tone;
   - **calibrate the judge against human ratings** on ~50 samples (Spearman / κ) before trusting it at scale.
@@ -229,7 +229,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
 ### WS7: Clinician review (prep M1–M2, run M3, analyze M4)
 
 - ☑ **T7.1** Ethics determination and approval **before any clinician-facing session** (→ A-1). *Answered 2026-10-09: Prof. Abusitta confirmed no Polytechnique ethics certification is required. Clinician recruitment (M-7) is now the critical path.*
-- ◐ **T7.2** Study design (draft end of M2). Proposal: *2026-10-02: draft 40-case set (5 per correct/wrong × confident/uncertain × benign/malignant cell) with label-only, Grad-CAM and template materials and a separate answer key.*
+- ◐ **T7.2** Study design (draft end of M2). Proposal: *2026-10-02: draft 40-case set (5 per correct/wrong × confident/uncertain × benign/malignant cell) with label-only, Grad-CAM and template materials and a separate answer key. 2026-10-18: request to clinicians drafted (one clinical reviewer, ~2 h, by Nov 13; ≥ 3 raters, ~75 min, Nov 30–Dec 13); the reviewer is also asked how to present counter-intuitive reasons (a benign-typical value supporting malignant), which the LLM judge flagged.*
   - **Case set:** ~40 cases stratified as in T6.5, frozen model version (→ S1-8).
   - **Sequential reveal per case:**
     1. The clinician's own impression, unaided.
