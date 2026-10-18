@@ -70,7 +70,9 @@ def test_limesurvey_tsv_blocks_mirror_each_other():
     en = [r for r in rows if r["language"] == "en"]
     fr = [r for r in rows if r["language"] == "fr"]
     assert len(en) == len(fr) and [r["class"] for r in en] == [r["class"] for r in fr]
-    assert [r["id"] for r in en] == [r["id"] for r in fr] and [r["name"] for r in en[3:]] == [r["name"] for r in fr[3:]]
+    assert [r["id"] for r in en] == [r["id"] for r in fr]
+    codes = lambda rows: [r["name"] for r in rows if r["class"] in ("Q", "A")]  # group names are translated titles
+    assert codes(en) == codes(fr)
     last_en = max(i for i, r in enumerate(rows) if r["language"] == "en")
     assert last_en < min(i for i, r in enumerate(rows) if r["language"] == "fr")  # whole EN block first
     settings = {r["name"]: r["text"] for r in rows if r["class"] == "S"}
