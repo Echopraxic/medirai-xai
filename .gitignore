@@ -41,3 +41,5 @@ uncertaintyNet-main/log_runs.csv
 
 # Versioned run outputs (trees/output_v0.2, ...)
 output_*/
+DERMATOLOGIST_REQUEST.md
+MEDIRAI_EMAIL_*.md
