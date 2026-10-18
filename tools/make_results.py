@@ -68,8 +68,18 @@ def llm_runs():
     return runs
 
 
+def c1_met(f, target=0.85):
+    """C1 needs >= 85% overall and per true class; 'overall yes' only when the overall figure itself passes."""
+    if min(f["by_true_label"].values()) >= target:
+        return "yes"
+    return "overall yes, per class no" if f["overall"] >= target else "no"
+
+
 def criteria_section(runs):
-    tree = load("trees/output_v1.0/tree_report.json")
+    # C1 is measured against the explained model: the split-v2 det ResNet50 when its refit exists, else the v1 one
+    tree_rel = first("trees/output_v1.0_detv2/tree_report.json", "trees/output_v1.0/tree_report.json")
+    tree = load(tree_rel) if tree_rel else None
+    explained = "split-v2 det ResNet50" if tree_rel and "detv2" in tree_rel else "split-v1 ResNet50 (stale)"
     enh = load("concepts/output/enhance_report.json")
     rows = []
     if tree:
@@ -77,8 +87,8 @@ def criteria_section(runs):
         rows.append({"criterion": "C1 surrogate fidelity", "target": "≥ 85%, per class",
                      "value": f"{fmt(f['overall'], pct=True)} (benign {fmt(f['by_true_label']['0'], pct=True)}, "
                               f"malignant {fmt(f['by_true_label']['1'], pct=True)}; on ResNet-wrong "
-                              f"{fmt(f['on_resnet_wrong']['agreement'], pct=True)})",
-                     "met": "overall yes, per class no" if min(f["by_true_label"].values()) < 0.85 else "yes"})
+                              f"{fmt(f['on_resnet_wrong']['agreement'], pct=True)}; {explained})",
+                     "met": c1_met(f)})
     if enh:
         parts, usable, rel_ok = [], [], []
         for c, v in enh["concepts"].items():
@@ -110,8 +120,8 @@ def criteria_section(runs):
     rows.append({"criterion": "C7 clinician review", "target": "NL ≥ Grad-CAM, label-only", "value": "not run", "met": "—"})
     return ("## Success criteria (plan §1)\n\n" + table(rows, ["criterion", "target", "value", "met"])
             + "\n\nC3–C6 show the best non-template LLM run by pass-all rate; all runs are in the LLM section. C3 is "
-              "structural (each claim cites a supplied feature_id); the semantic NLI check is not built yet.\n\n"
-            + src("trees/output_v1.0/tree_report.json", "concepts/output/enhance_report.json"))
+              "structural (each claim cites a supplied feature_id); the semantic NLI check is in the D5 section.\n\n"
+            + src(*([tree_rel] if tree_rel else []), "concepts/output/enhance_report.json"))
 
 
 def baseline_section():
@@ -298,6 +308,44 @@ def new_checks_section():
     return "\n\n".join(out)
 
 
+def d5_section():
+    """D5 automated validation from the latest d5_* run: counterfactual sensitivity, consistency, NLI (T6.1-T6.3)."""
+    out = ["## D5 automated validation (counterfactuals, consistency, NLI)"]
+    d5 = latest("explain/output/d5_*/nli_calibration.json")
+    if not d5:
+        return out[0] + "\n\nNo D5 run found."
+    run = ROOT / Path(d5).parent
+    nli = load(d5)
+    out.append(f"Run `{run.name}`. NLI checker ({nli['model']}, entail >= {nli['entail_min']}) on synthetic controls: "
+               f"false alarms {fmt(nli['false_alarm_rate'], pct=True)}; detection "
+               + ", ".join(f"{k} {fmt(v, pct=True)}" for k, v in nli["detection_rate"].items()) + ".")
+    rows = []
+    for arm in sorted(d for d in run.iterdir() if d.is_dir()):
+        rel = lambda name: (arm / name).relative_to(ROOT).as_posix()
+        cf, sim, par, ns = (load(rel(f)) for f in ("counterfactual_scores.json", "consistency_similar.json",
+                                                   "consistency_paraphrase.json", "nli_scores.json"))
+        if not any((cf, sim, par, ns)):
+            continue
+        row = {"arm": arm.name}
+        if cf:
+            for k in ("flip", "swap", "drop"):
+                row[f"{k} sens / stab"] = f"{fmt(cf[k]['sensitivity'], 2)} / {fmt(cf[k]['stability'], 2)}"
+            row["determinism"] = fmt(cf["determinism"]["identical_rate"], pct=True)
+        if sim:
+            row["same-signature Jaccard"] = fmt(sim["same_signature"]["mean_jaccard"], 2)
+        if par:
+            row["paraphrase same direction / Jaccard"] = f"{fmt(par['same_direction_rate'], pct=True)} / {fmt(par['mean_jaccard'], 2)}"
+        if ns:
+            row["NLI entailed / contradicted"] = f"{fmt(ns['entailed_rate'], pct=True)} / {fmt(ns['contradicted_rate'], pct=True)}"
+        rows.append(row)
+    cols = list(dict.fromkeys(c for r in rows for c in r))
+    out.append(table(rows, cols) + "\n\nSensitivity = the explanation changes when the perturbed feature changes; stability "
+               "= the untouched claims stay the same. Paraphrase rows compare the paraphrased prompt with the base prompt "
+               "of the same model. NLI precision on real flagged claims still needs human labels (RQ1).")
+    out.append(src(d5))
+    return "\n\n".join(out)
+
+
 def model_comparison_section():
     """Paired cluster bootstraps between explained-model candidates, and performance by skin tone."""
     out = ["## Explained-model candidates and skin tone"]
@@ -335,7 +383,7 @@ def main(opts):
         "Numbers are read from the output files named under each section. Older outputs (e.g. features v0.2, "
         "the split-v1 ResNet50) are labelled as such; re-run the pipeline step to refresh them.",
         criteria_section(runs), baseline_section(), masks_section(), trees_section(), concepts_section(),
-        llm_section(runs), c6_gradcam_section(), new_checks_section(), model_comparison_section(),
+        llm_section(runs), c6_gradcam_section(), new_checks_section(), d5_section(), model_comparison_section(),
     ]
     out = Path(opts.out)
     out.write_text("\n\n".join(parts) + "\n", encoding="utf-8", newline="\n")
