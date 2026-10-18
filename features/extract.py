@@ -13,6 +13,11 @@ lesions fill ~2x more of the frame) and white balance. v0.2 therefore:
      they describe how the photo was framed, not the lesion, so they are kept for QA but never modelled
      or explained. There is no D (mm) feature: no calibration exists outside UFES.
 
+v1.0 (2026-10-09, frozen with S1) keeps the v0.2 extraction code and changes the masks: the table is built on the
+clinical fine-tuned UNet (segmentation/finetune_clinical.py), chosen on the hand-annotated gold set, with the
+gold-calibrated quality flag (segmentation/postprocess.quality_flag_v1). C_n_colors stays a model feature but is
+never phrased in explanations until it is validated against expert color labels (Derm7pt/PH2).
+
 Feature names are <GROUP>_<name>; GROUP is the concept group used for SHAP grouping:
   A asymmetry · B border · C color · T texture/surface · S shape
 See FEATURE_DICTIONARY for units and direction. Thresholds that turn these into clinical words are NOT
@@ -23,7 +28,7 @@ from PIL import Image
 from scipy import ndimage
 from skimage import color, feature, measure
 
-FEATURE_VERSION = "v0.2"
+FEATURE_VERSION = "v1.0"
 LESION_SIDE = 192   # lesion max Feret diameter after resampling (px); MILK lesions are ~175 px natively
 CROP_MARGIN = 0.35  # context kept around the lesion, as a fraction of its Feret diameter (skin ring needs ~0.2)
 SOG_P = 6           # Shades-of-Gray Minkowski norm
@@ -242,7 +247,7 @@ FEATURE_DICTIONARY = {
     "C_frac_dark_brown": ("C", "fraction", "... dark-brown prototype"),
     "C_frac_blue_gray": ("C", "fraction", "... blue-gray prototype"),
     "C_frac_black": ("C", "fraction", "... black prototype"),
-    "C_n_colors": ("C", "count 0-6", "named colors covering >= 5% of the lesion (exploratory, unvalidated)"),
+    "C_n_colors": ("C", "count 0-6", "named colors covering >= 5% of the lesion (model feature only; not phrased in explanations until validated)"),
     "C_color_entropy": ("C", "bits", "entropy of the lesion a*b* histogram; higher = more color variety"),
     "C_color_std": ("C", "Lab units", "sum of L*, a*, b* standard deviations inside the lesion"),
     "C_deltaE_vs_skin": ("C", "deltaE76", "lesion mean color vs surrounding skin"),

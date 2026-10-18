@@ -43,6 +43,7 @@ parse_in.add_argument('--train_fraction', type=float, default=None,
 					help='MEDIRV2: train on this fraction of training lesion groups (learning curves); val/test unchanged')
 parse_in.add_argument('--subsample_seed', type=int, default=0, help='seed for --train_fraction')
 parse_in.add_argument('--epochs',       type=int, default=None, help='override Training/Parameters/num_epochs')
+parse_in.add_argument('--lr',           type=float, default=None, help='override Training/Parameters/lr')
 parse_in.add_argument('--no_likelihood_std', action='store_true',
 					help='variational nets: plain ELBO (NLL + weighted KL) in train and val, without the '
 						 'MC-sample loss spread term added for P1-4')
@@ -67,6 +68,10 @@ if opts.train_fraction is not None:
 	config["Training"]["Dataset"]["subsample_seed"] = opts.subsample_seed
 if opts.epochs is not None:
 	config["Training"]["Parameters"]["num_epochs"] = opts.epochs
+	if config["Training"]["LR Scheduler"]["scheduler_type"].upper() == "COSINE":
+		config["Training"]["LR Scheduler"]["T_max"] = opts.epochs  # anneal over the whole run
+if opts.lr is not None:
+	config["Training"]["Parameters"]["lr"] = opts.lr
 if opts.network_type is not None:
 	config["Network"]["Basic Setup"]["network_type"] = opts.network_type
 if config["Paths"]["save_path"] == '':

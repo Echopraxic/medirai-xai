@@ -38,3 +38,10 @@ def test_every_feature_has_a_phrase():
     sys.path.insert(0, str(ROOT / "features"))
     import extract
     assert set(extract.FEATURE_DICTIONARY) <= set(PHRASES)
+
+
+def test_template_never_states_a_colour_count():
+    from template import describe
+    text = describe({"feature_id": "C_n_colors", "benign_percentile": 90.0, "direction": "supports",
+                     "strength": "weak", "concept": "color"}, "malignant")
+    assert "number" not in text and "C_n_colors" not in text

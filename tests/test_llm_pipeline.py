@@ -34,8 +34,8 @@ def test_llm_input_has_no_numbers_and_categorical_findings(inp):
     shown["evidence"] = [{k: v for k, v in e.items() if k != "feature_id"} for e in inp["evidence"]]
     assert not re.search(r"\d", json.dumps(shown))   # feature ids (S_hu3) are copied, never shown as numbers
     border, color, hu = inp["evidence"]
-    assert border["finding"] == "irregular" and border["relative_to_benign"].startswith("much higher")
-    assert color["finding"] == "dark" and color["relative_to_benign"].startswith("higher")
+    assert border["finding"] == "irregular" and border["relative_to_benign"] == "much more irregular than most benign lesions"
+    assert color["finding"] == "dark" and color["relative_to_benign"] == "darker than most benign lesions"
     assert not hu["clinically_mapped"] and "without a clinical name" in hu["measure"]
     assert inp["confidence"] == "high" and inp["uncertain"] is False
 
@@ -82,3 +82,67 @@ def test_unparseable_output_fails_cleanly(inp):
     res = verify(inp, "Sure! Here is the explanation: the lesion is irregular.")
     assert res == {"parse_ok": False, "schema_ok": False, "pass_all": False}
     assert verify(inp, "```json\n" + json.dumps(good(inp)) + "\n```")["pass_all"]
+
+
+def test_supporting_the_other_class_counts_as_arguing_against(inp):
+    """Smoke run 2026-10-07: 'supporting the benign prediction' for a malignant prediction is a correct paraphrase."""
+    out = good(inp)
+    out["reasons"][2]["text"] = "The shape pattern is unusual; this strongly supports the benign prediction."
+    assert verify(inp, out)["direction"] == 1.0
+    out["reasons"][0]["text"] = "The border outline is irregular; this strongly supports the benign prediction."
+    assert verify(inp, out)["direction"] < 1.0   # input says this one supports malignant
+
+
+def test_hybrid_assembles_code_caveats_around_llm_reasons():
+    """hybrid_v1: caveats come from code, so they hold even when the LLM writes only reasons."""
+    from llm_generate import assemble, load_prompt
+    spec = load_prompt("hybrid_v1")
+    inp = li.build(raw_payload(entropy=0.9, agrees=False), "review", 0.5)
+    raw = json.dumps({"reasons": render_llm_input(inp)["reasons"]})
+    final = assemble(spec, inp, raw)
+    res = verify(inp, final)
+    assert res["pass_all"] and res["uncertainty_ok"]
+    assert "outline" in final["uncertainty_note"] and "mixed" in final["summary"]
+    assert not verify(inp, assemble(spec, inp, "no json here"))["pass_all"]   # unusable output fails, never passes
+
+
+def test_independent_check_caveat_only_for_confident_predictions_with_feature_model_doubt():
+    doubtful = dict(raw_payload(), feature_model_p_predicted=0.40)     # doubt 0.60 > cut
+    supported = dict(raw_payload(), feature_model_p_predicted=0.90)
+    assert li.build(doubtful, "ok", entropy_threshold=0.5)["independent_check_weak"]
+    assert not li.build(supported, "ok", entropy_threshold=0.5)["independent_check_weak"]
+    # uncertain cases already carry the stronger uncertainty note; pre-v2 inputs have no field
+    assert not li.build(dict(doubtful, uncertainty={"entropy_of_expected": 0.9}), "ok", 0.5)["independent_check_weak"]
+    assert not li.build(raw_payload(), "ok", 0.5)["independent_check_weak"]
+
+
+def test_verifier_requires_the_independent_check_caveat():
+    inp = li.build(dict(raw_payload(), feature_model_p_predicted=0.40), "ok", entropy_threshold=0.5)
+    out = render_llm_input(inp)
+    assert "independent model" in out["uncertainty_note"] and verify(inp, json.dumps(out))["uncertainty_ok"]
+    out["uncertainty_note"] = ""
+    assert not verify(inp, json.dumps(out))["uncertainty_ok"]
+
+
+def test_benign_comparison_follows_the_finding_word():
+    # asymmetry score below most benign lesions -> "symmetric", and the comparison must agree with that word
+    assert li.relative(15.0, "symmetric") == "more symmetric than most benign lesions"
+    assert li.relative(5.0, "symmetric") == "much more symmetric than most benign lesions"
+    assert li.relative(95.0, "dark") == "much darker than most benign lesions"
+    assert li.relative(80.0, "high") == "higher than in most benign lesions"
+    assert li.relative(50.0, "typical") == "within the typical range of benign lesions"
+
+
+def test_deferral_flag_overrides_entropy_threshold():
+    """S1-4: an attached uncertainty-table flag decides 'uncertain'; without it the entropy threshold does."""
+    import sys
+    sys.path.insert(0, str(ROOT / "explain"))
+    import attach_deferral
+    import llm_input as li
+    import pandas as pd
+    rows = [{"isic_id": "A", "split": "test", "llm_input": {"uncertainty": {"entropy_of_expected": 0.01}}},
+            {"isic_id": "B", "split": "test", "llm_input": {"uncertainty": {"entropy_of_expected": 0.9}}}]
+    table = pd.DataFrame({"isic_id": ["A", "B"], "deferred": [True, False], "defer_reason": ["disagreement", ""]})
+    assert not li.is_uncertain(rows[0]["llm_input"], 0.5) and li.is_uncertain(rows[1]["llm_input"], 0.5)
+    out = attach_deferral.attach(rows, table)
+    assert li.is_uncertain(out[0]["llm_input"], 0.5) and not li.is_uncertain(out[1]["llm_input"], 0.5)

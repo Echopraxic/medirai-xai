@@ -12,7 +12,8 @@ Checks, per explanation:
   uncertainty (C5)          uncertain -> the note says so and asks for clinician review; surrogate disagreement
                             and unreliable segmentation are stated when present
   invented_terms            dermatology vocabulary in the text that the input does not contain
-  digits                    any digit (the input has none, so a digit is an unsupported claim)
+  digits                    a number the input does not contain (llm_input has none, so any digit; raw-number
+                            encodings pass `allowed_numbers`: copying an input number is allowed, inventing one is not)
   named_diagnosis           a specific diagnosis named (the model is binary)
   advice                    treatment/management advice
   confident_terms (C6)      overconfident wording ("clearly", "definitely", ...), counted for the C6 comparison
@@ -53,6 +54,7 @@ REVIEW_WORDS = ["review", "clinician", "dermatologist", "expert"]
 SURROGATE_WORDS = ["may not reflect", "does not reproduce", "not reproduce", "approximat", "may not explain",
                    "disagree"]
 SEGMENT_WORDS = ["outline", "segmentation", "border detection", "boundary"]
+INDEPENDENT_WORDS = ["independent model", "less support", "second opinion", "reviewed with caution"]
 AGAINST_WORDS = ["argues against", "argue against", "against the", "does not support", "counts against",
                  "speaks against", "weighs against"]
 
@@ -81,7 +83,7 @@ def _has(text, words):
     return [w for w in words if w in t]
 
 
-def verify(llm_input, raw):
+def verify(llm_input, raw, allowed_numbers=None):
     out, parse_ok = parse(raw)
     res = {"parse_ok": parse_ok}
     required = {"summary", "reasons", "uncertainty_note", "limitations"}
@@ -96,10 +98,14 @@ def verify(llm_input, raw):
     res["grounding"] = len(grounded) / len(reasons) if reasons else 0.0
     res["coverage"] = len({r["feature_id"] for r in grounded}) / len(evidence)
 
+    # "supports the benign prediction" when the model predicts malignant is a correct way to say "argues against"
+    other = "benign" if llm_input["prediction"] == "malignant" else "malignant"
+    supports_other = re.compile(rf"support\w*\s+(?:the\s+)?{other}\b", re.I)
     dir_ok = []
     for r in grounded:
         expected = evidence[r["feature_id"]]["direction"]
-        says_against = bool(_has(r.get("text", ""), AGAINST_WORDS))
+        text = r.get("text", "")
+        says_against = bool(_has(text, AGAINST_WORDS)) or bool(supports_other.search(text))
         dir_ok.append(r.get("direction") == expected and says_against == (expected == "argues_against"))
     res["direction"] = sum(dir_ok) / len(dir_ok) if dir_ok else 0.0
 
@@ -112,13 +118,17 @@ def verify(llm_input, raw):
         checks.append(bool(_has(full, SURROGATE_WORDS)))
     if not llm_input["segmentation_reliable"]:
         checks.append(bool(_has(full, SEGMENT_WORDS)))
+    if llm_input.get("independent_check_weak"):
+        checks.append(bool(_has(full, INDEPENDENT_WORDS)))
     res["uncertainty_ok"] = all(checks)
     res["uncertainty_flag_ok"] = bool(_has(note, UNCERTAIN_WORDS)) if llm_input["uncertain"] else True
 
     allowed = " ".join([e["measure"] + " " + e["finding"] + " " + e["relative_to_benign"] + " " + e["concept"]
                         for e in llm_input["evidence"]] + llm_input["limitations"]).lower()
     res["invented_terms"] = sorted(t for t, pat in VOCAB_PATTERNS.items() if pat.search(full) and not pat.search(allowed))
-    res["digits"] = bool(re.search(r"\d", full))
+    numbers = re.findall(r"\d+(?:\.\d+)?", full)
+    allowed = {float(a) for a in (allowed_numbers or ())}
+    res["digits"] = any(float(n) not in allowed for n in numbers)  # 0.41 and 0.410 are the same number
     res["named_diagnosis"] = sorted({w for w in DIAGNOSES if re.search(rf"\b{w}", full.lower())})
     res["advice"] = _has(full, ADVICE)
     res["confident_terms"] = _has(full, CONFIDENT)

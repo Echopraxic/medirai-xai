@@ -15,6 +15,7 @@ no identifier (the isic_id stays outside the prompt).
 import argparse
 import hashlib
 import json
+import os
 import platform
 import sys
 import time
@@ -25,6 +26,7 @@ sys.path.insert(0, str(HERE))
 import llm_input as li  # noqa: E402
 import verifier  # noqa: E402
 from template import render_llm_input  # noqa: E402
+import attribution_encodings as encodings  # noqa: E402
 
 DECODING = {"temperature": 0.0, "do_sample": False, "max_new_tokens": 700, "seed": 0}
 
@@ -36,9 +38,12 @@ def load_prompt(version):
     return spec
 
 
-def messages(spec, inp):
-    system = spec["system"].format(audience=inp["audience"])
-    user = spec["user"].format(input_json=json.dumps(inp, indent=1))
+def messages(spec, inp, prompt_input=None):
+    """prompt_input: what the LLM sees when an attribution encoding is set (explain/attribution_encodings.py); else inp."""
+    shown = prompt_input or inp
+    system = spec["system"].format(audience=shown["audience"])
+    user = spec["user"].format(input_json=json.dumps(shown, indent=1), prediction=shown["prediction"],
+                               evidence_json=json.dumps(shown["evidence"], indent=1))
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
@@ -82,33 +87,70 @@ class HFBackend:
         return self.tok.batch_decode(out[:, enc["input_ids"].shape[1]:], skip_special_tokens=True)
 
 
-class VLLMBackend:
-    def __init__(self, model_id, guided=True):
-        from transformers import AutoTokenizer
-        from vllm import LLM, SamplingParams
-        self.tok = AutoTokenizer.from_pretrained(model_id)
-        self.llm = LLM(model=model_id, seed=DECODING["seed"], dtype="bfloat16", max_model_len=4096)
-        kwargs = {"temperature": 0.0, "max_tokens": DECODING["max_new_tokens"], "seed": DECODING["seed"]}
-        self.guided = False
-        if guided:   # JSON-schema constrained decoding; the API name changed across vLLM versions
+def vllm_sampling(schema, max_tokens=None):
+    """Greedy, seeded sampling params with JSON-schema constrained decoding (API name differs by vLLM version)."""
+    from vllm import SamplingParams
+    kwargs = {"temperature": 0.0, "max_tokens": max_tokens or DECODING["max_new_tokens"], "seed": DECODING["seed"]}
+    guided = False
+    if schema is not None:
+        try:
+            from vllm.sampling_params import StructuredOutputsParams
+            kwargs["structured_outputs"] = StructuredOutputsParams(json=schema)
+            guided = True
+        except ImportError:
             try:
-                from vllm.sampling_params import StructuredOutputsParams
-                kwargs["structured_outputs"] = StructuredOutputsParams(json=li.OUTPUT_SCHEMA)
-                self.guided = True
+                from vllm.sampling_params import GuidedDecodingParams
+                kwargs["guided_decoding"] = GuidedDecodingParams(json=schema)
+                guided = True
             except ImportError:
-                try:
-                    from vllm.sampling_params import GuidedDecodingParams
-                    kwargs["guided_decoding"] = GuidedDecodingParams(json=li.OUTPUT_SCHEMA)
-                    self.guided = True
-                except ImportError:
-                    pass
-        self.params = SamplingParams(**kwargs)
+                pass
+    return SamplingParams(**kwargs), guided
+
+
+def vllm_engine(model_id, max_model_len=4096, **extra):
+    """Mistral-format repos (tekken tokenizer only, e.g. Mistral Small 3.x) need vLLM's mistral tokenizer mode."""
+    from vllm import LLM
+    if "Mistral-Small" in model_id:
+        extra.setdefault("tokenizer_mode", "mistral")
+    extra.setdefault("tensor_parallel_size", int(os.environ.get("VLLM_TP", "1")))  # 32B on 40 GB A100s needs 2
+    return LLM(model=model_id, seed=DECODING["seed"], dtype="bfloat16", max_model_len=max_model_len, **extra)
+
+
+def vllm_chat(llm, model_id, conversations, params):
+    """Chat API (each model's own template). Qwen3: thinking off. Falls back to merging the system prompt into
+    the user turn for templates without a system role."""
+    kwargs = {"chat_template_kwargs": {"enable_thinking": False}} if "Qwen3" in model_id else {}
+    try:
+        outs = llm.chat(conversations, params, use_tqdm=False, **kwargs)
+    except Exception as err:
+        if "system" not in str(err).lower():
+            raise
+        merged = [[{"role": "user", "content": c[0]["content"] + "\n\n" + c[1]["content"]}] for c in conversations]
+        outs = llm.chat(merged, params, use_tqdm=False, **kwargs)
+    return [o.outputs[0].text for o in outs]
+
+
+class VLLMBackend:
+    def __init__(self, model_id, guided=True, schema=None):
+        self.llm = vllm_engine(model_id)
+        self.params, self.guided = vllm_sampling((schema or li.OUTPUT_SCHEMA) if guided else None)
         self.name = model_id
         self.revision = "see HF cache snapshot"
 
     def generate(self, batch_msgs, batch_inputs):
-        texts = [chat_text(self.tok, m) for m in batch_msgs]
-        return [o.outputs[0].text for o in self.llm.generate(texts, self.params, use_tqdm=False)]
+        return vllm_chat(self.llm, self.name, batch_msgs, self.params)
+
+
+def assemble(spec, inp, raw):
+    """Full-output prompts: the model output as is. reasons_only prompts: code-built summary, caveats and
+    limitations (template.render_llm_input) around the model's reason sentences."""
+    if spec.get("mode") != "reasons_only":
+        return raw
+    final = render_llm_input(inp)
+    parsed, ok = verifier.parse(raw)
+    reasons = parsed.get("reasons") if ok and isinstance(parsed, dict) else None
+    final["reasons"] = reasons if isinstance(reasons, list) else []
+    return final
 
 
 def stratum(row, inp):
@@ -122,28 +164,40 @@ def main(opts):
     rows = [r for r in rows if r["split"] == opts.split]
     if opts.limit:
         rows = rows[:opts.limit]
-    inputs = [li.build(r["llm_input"], r["mask_quality"], threshold) for r in rows]
+    if opts.encoding:
+        enc = [encodings.encode(r["llm_input"], r["mask_quality"], threshold, opts.encoding) for r in rows]
+        prompt_inputs, inputs, allowed = (list(x) for x in zip(*enc)) if enc else ([], [], [])
+    else:
+        inputs = [li.build(r["llm_input"], r["mask_quality"], threshold) for r in rows]
+        prompt_inputs, allowed = [None] * len(rows), [None] * len(rows)
 
     if opts.backend == "template":
         backend, spec = TemplateBackend(), {"version": "template_v1", "sha256_16": "n/a"}
     else:
         spec = load_prompt(opts.prompt)
-        backend = HFBackend(opts.model) if opts.backend == "hf" else VLLMBackend(opts.model, not opts.no_guided)
+        schema = li.REASONS_SCHEMA if spec.get("mode") == "reasons_only" else li.OUTPUT_SCHEMA
+        backend = HFBackend(opts.model) if opts.backend == "hf" else VLLMBackend(opts.model, not opts.no_guided, schema)
 
-    run_name = f"{backend.name.split('/')[-1]}__{spec['version']}"
+    run_name = f"{backend.name.split('/')[-1]}__{spec['version']}" + (f"__{opts.encoding}" if opts.encoding else "")
     out = Path(opts.out) / run_name
     out.mkdir(parents=True, exist_ok=True)
     t0, results = time.time(), []
     with open(out / "generations.jsonl", "w", encoding="utf-8") as fh:
         for k in range(0, len(rows), opts.batch_size):
-            batch_rows, batch_inp = rows[k:k + opts.batch_size], inputs[k:k + opts.batch_size]
-            batch_msgs = [messages(spec, i) for i in batch_inp] if opts.backend != "template" else [None] * len(batch_inp)
-            for row, inp, raw in zip(batch_rows, batch_inp, backend.generate(batch_msgs, batch_inp)):
-                check = verifier.verify(inp, raw)
+            sl = slice(k, k + opts.batch_size)
+            batch_rows, batch_inp, batch_shown, batch_allowed = rows[sl], inputs[sl], prompt_inputs[sl], allowed[sl]
+            batch_msgs = ([messages(spec, i, s) for i, s in zip(batch_inp, batch_shown)] if opts.backend != "template"
+                          else [None] * len(batch_inp))
+            for row, inp, ok_numbers, raw in zip(batch_rows, batch_inp, batch_allowed,
+                                                 backend.generate(batch_msgs, batch_inp)):
+                final = assemble(spec, inp, raw)
+                check = verifier.verify(inp, final, ok_numbers)
                 results.append((stratum(row, inp), check))
-                fh.write(json.dumps({"isic_id": row["isic_id"], "source": row["source"], "label": row["label"],
+                fh.write(json.dumps({"isic_id": row["isic_id"], "row_id": row.get("row_id", row["isic_id"]),
+                                     "variant": row.get("variant", "base"), "source": row["source"], "label": row["label"],
                                      "stratum": stratum(row, inp), "input_hash": li.input_hash(inp),
-                                     "llm_input": inp, "raw_output": raw, "verify": check}) + "\n")
+                                     "llm_input": inp, "raw_output": raw, "final_output": final,
+                                     "verify": check}) + "\n")
             print(f"{min(k + opts.batch_size, len(rows))}/{len(rows)}", flush=True)
     elapsed = time.time() - t0
 
@@ -154,6 +208,7 @@ def main(opts):
                 "guided_json": getattr(backend, "guided", False), "prompt_version": spec["version"],
                 "prompt_sha256_16": spec["sha256_16"], "decoding": DECODING,
                 "llm_input_version": li.LLM_INPUT_VERSION, "phrase_bank": li.PHRASE_BANK_VERSION,
+                "encoding": opts.encoding or "C-phrase (llm_input)",
                 "entropy_threshold_val_p75": threshold, "inputs": str(opts.inputs),
                 "inputs_sha256_16": hashlib.sha256(Path(opts.inputs).read_bytes()).hexdigest()[:16],
                 "split": opts.split, "n": len(rows), "seconds": round(elapsed, 1),
@@ -161,7 +216,9 @@ def main(opts):
     if opts.backend != "template":
         import torch
         manifest["gpu"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
-        manifest["max_gpu_mem_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 2) if torch.cuda.is_available() else 0
+        # vLLM runs the model in a separate engine process, so this process's allocator sees nothing
+        manifest["max_gpu_mem_gb"] = (None if opts.backend == "vllm" else
+                                      round(torch.cuda.max_memory_allocated() / 1e9, 2) if torch.cuda.is_available() else 0)
     (out / "run_manifest.json").write_text(json.dumps(manifest, indent=1))
     (out / "verify_summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary["overall"], indent=1))
@@ -178,4 +235,6 @@ if __name__ == "__main__":
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--no_guided", action="store_true", help="vLLM: disable JSON-schema constrained decoding")
     ap.add_argument("--out", default=str(HERE / "output"))
+    ap.add_argument("--encoding", choices=encodings.ENCODINGS, default=None,
+                    help="attribution encoding for the paper's RQ2 (use with --prompt enc_v1); default: llm_input")
     main(ap.parse_args())

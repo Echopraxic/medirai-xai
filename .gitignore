@@ -30,11 +30,16 @@ CODEBASE_TODO.md
 SHATHA_HANDOFF.md
 SHATHA_NOTE_*.md
 S2_PAPER_PROPOSAL.md
+S2_PAPER_PREREG_*.md
 S2_EXECUTION_TODO.md
 S2_DATASET_SURVEY.md
+RESULTS.md
+docs/archive/
 splits/*_report.md
 datasets_*/
 uncertaintyNet-main/log_runs.csv
 
 # Versioned run outputs (trees/output_v0.2, ...)
 output_*/
+DERMATOLOGIST_REQUEST.md
+MEDIRAI_EMAIL_*.md

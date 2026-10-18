@@ -162,7 +162,7 @@ def main(opts):
     todo = [i for i in all_ids() if i not in done]
     print(f"{len(todo)} images to annotate ({len(done)} already done).")
     if todo:
-        Annotator(todo, opts.annotator)
+        app = Annotator(todo, opts.annotator)  # keep a reference: mpl holds callbacks weakly
         plt.show()
 
 

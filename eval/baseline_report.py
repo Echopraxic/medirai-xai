@@ -25,6 +25,11 @@ SOURCE_SHORT = {"MILK study team": "MILK", "Memorial Sloan Kettering Cancer Cent
                 "Federal University of Espírito Santo (UFES)": "UFES"}
 
 
+DEFAULT_TITLE = "Provisional baseline on the grouped split (isic_clinical_v1)"
+DEFAULT_SETUP = ("Local RTX 3050 runs (batch 32 x 4 accumulation, fp16 autocast, 768-px image cache). "
+                 "Provisional: the official numbers are S1's re-run of the same scripts on the VM/cluster.")
+
+
 def short_source(s):
     for k, v in SOURCE_SHORT.items():
         if isinstance(s, str) and s.startswith(k[:20]):
@@ -84,10 +89,8 @@ def report_run(name, run_dir):
     return res
 
 
-def to_markdown(results):
-    lines = ["# Provisional baseline on the grouped split (isic_clinical_v1)", "",
-             "Local RTX 3050 runs (batch 32 x 4 accumulation, fp16 autocast, 768-px image cache). "
-             "Provisional: the official numbers are S1's re-run of the same scripts on the VM/cluster.", ""]
+def to_markdown(results, title=DEFAULT_TITLE, setup=DEFAULT_SETUP):
+    lines = [f"# {title}", "", setup, ""]
     cols = ["accuracy", "balanced_accuracy", "auroc", "ece_pos", "ece_top_label", "brier"]
     lines += ["## Test set", "", "| run | n | " + " | ".join(cols) + " |", "|---|---|" + "---|" * len(cols)]
     for r in results:
@@ -123,6 +126,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", nargs="+", required=True, help="name=run_folder (relative to uncertaintyNet-main/output)")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--title", default=DEFAULT_TITLE)
+    ap.add_argument("--setup", default=DEFAULT_SETUP, help="one-line description of the training setup")
     opts = ap.parse_args()
     results = []
     for item in opts.runs:
@@ -131,5 +136,5 @@ if __name__ == "__main__":
     out = Path(opts.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "baseline_results.json").write_text(json.dumps(results, indent=1, default=float))
-    (out / "baseline_report.md").write_text(to_markdown(results), encoding="utf-8")
-    print(to_markdown(results))
+    (out / "baseline_report.md").write_text(to_markdown(results, opts.title, opts.setup), encoding="utf-8")
+    print(to_markdown(results, opts.title, opts.setup))

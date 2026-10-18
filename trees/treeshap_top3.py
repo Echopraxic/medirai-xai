@@ -29,6 +29,17 @@ GROUP_NAMES = {"A": "asymmetry", "B": "border", "C": "color", "D": "diameter", "
                "S": "shape"}
 
 
+# Model features never cited as a reason's feature_id (no validated clinical wording yet); their SHAP still
+# counts toward the group total.
+NOT_PHRASED = {"C_n_colors"}
+
+
+def representative(contrib: pd.Series) -> str:
+    """Feature cited for a group: the largest contribution in the group's direction, skipping NOT_PHRASED."""
+    phrased = contrib.drop(list(NOT_PHRASED), errors="ignore")
+    return (phrased if len(phrased) else contrib).idxmax()
+
+
 def grouped(shap_df, feats):
     groups = sorted({f[0] for f in feats})
     return pd.DataFrame({g: shap_df[[f for f in feats if f[0] == g]].sum(1) for g in groups})
@@ -96,19 +107,29 @@ def main(opts):
             gval = g.loc[i, grp]
             members = [f for f in feats if f[0] == grp]
             contrib = signed.loc[i, members] * np.sign(gval)
-            fid = contrib.idxmax()
+            fid = representative(contrib)
             value = float(df.loc[i, fid])
             pct = float(np.searchsorted(ref[fid], value) / max(len(ref[fid]), 1) * 100)
             reasons.append({"concept": GROUP_NAMES[grp], "group": grp, "feature_id": fid,
                             "direction": "supports" if gval > 0 else "argues_against",
                             "strength": strength(gval), "grouped_shap": round(float(gval), 4),
                             "feature_value": round(value, 4), "benign_percentile": round(pct, 1)})
+        # ungrouped top-3 features (raw SHAP toward the prediction): input for the F-raw encoding (explain/encodings.py)
+        top_feats = signed.loc[i, feats].abs().nlargest(3).index
+        raw_top = [{"feature_id": f, "group": f[0], "shap": round(float(signed.loc[i, f]), 4),
+                    "feature_value": round(float(df.loc[i, f]), 4),
+                    "benign_percentile": round(float(np.searchsorted(ref[f], df.loc[i, f]) / max(len(ref[f]), 1) * 100), 1)}
+                   for f in top_feats]
         payload = {
             "prediction": "malignant" if r.resnet_pred == 1 else "benign",
             "probability_malignant": round(float(r.resnet_p_malignant), 3),
             "uncertainty": {"entropy_of_expected": round(float(r.entropy_of_expected), 4)},
             "surrogate_agrees": bool(r.binary_surrogate_pred == r.resnet_pred),
+            # ground-truth feature tree's probability of the ResNet50's predicted class: an independent second
+            # opinion that flags confident errors better than entropy (eval/error_signals.py)
+            "feature_model_p_predicted": round(float(r.binary_gt_p if r.resnet_pred == 1 else 1 - r.binary_gt_p), 3),
             "top_concepts": reasons,
+            "top_features": raw_top,
             "audience": "dermatologist",
         }
         lines.append({"isic_id": r.isic_id, "split": r.split, "label": int(r.label), "mask_quality": r.mask_quality,

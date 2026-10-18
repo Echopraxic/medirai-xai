@@ -169,8 +169,14 @@ DEFAULT_SPLIT_FILE = Path(__file__).resolve().parents[1] / "splits" / "isic_clin
 
 
 def load_split(split_file=None, data_dir=None):
-	"""Read the persisted split; optionally check that every train/val/test image exists in data_dir."""
-	split_file = split_file or DEFAULT_SPLIT_FILE
+	"""Read the persisted split; optionally check that every train/val/test image exists in data_dir.
+
+	A relative split_file (e.g. "../splits/isic_clinical_v2.csv" in a config) is resolved against this
+	folder, not the cwd: eval/export_predictions.py runs from the repo root and re-reads the same config.
+	"""
+	split_file = Path(split_file) if split_file else DEFAULT_SPLIT_FILE
+	if not split_file.is_absolute():
+		split_file = Path(__file__).resolve().parent / split_file
 	df = pd.read_csv(split_file, dtype={"label": "Int64"})
 	df = df[df["split"] != "excluded"].reset_index(drop=True)
 	if data_dir is not None:

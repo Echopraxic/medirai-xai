@@ -6,8 +6,11 @@ feature_version, frame_* QA columns (not modelled), then the <GROUP>_<name> feat
 lesion get NaN features and extraction_error set; they stay in the table so nothing is silently dropped.
 
     python features/build_table.py --images uncertaintyNet-main/datasets_768/ISIC_clinical \
-        --masks uncertaintyNet-main/datasets_768/ISIC_clinical_masks/unet \
-        --quality segmentation/output/qa/mask_quality.csv --out features/output/feature_table_v0.2.parquet
+        --masks uncertaintyNet-main/datasets_768/ISIC_clinical_masks/unet_clinical \
+        --quality segmentation/output/qa_clinical/mask_quality.csv --out features/output/feature_table_v1.0.parquet
+
+The dictionary also lists the QA columns (group "QA"): they describe the mask, are never modelled, and are
+strongly tied to the label (most "fail" masks are malignant lesions), so they must not be used as features.
 """
 import argparse
 import hashlib
@@ -38,6 +41,18 @@ OVA_MAP = {
 }
 OVA_CLASSES = ["BCC", "Nevus", "SCC", "SK", "Melanoma", "Other"]
 
+# Mask QA columns copied from segmentation/mask_quality.py (unet_* = the primary mask model's statistics).
+QA_COLUMNS = {
+    "mask_source": ("name", "mask model the features were computed on"),
+    "mask_quality_version": ("name", "quality-flag rule (v0 original UNet, v1 gold-calibrated)"),
+    "mask_quality": ("ok/review/fail", "mask quality flag; explanations abstain or warn on review/fail"),
+    "unet_sam_dice": ("0-1", "Dice between the mask and the zero-shot SAM mask"),
+    "unet_area_ratio": ("0-1", "mask share of the image"),
+    "unet_border_touch": ("0-1", "share of the image border covered by the mask"),
+    "unet_boundary_uncertainty": ("0-1", "share of mask-area pixels with probability 0.3-0.7"),
+    "unet_mean_prob_in_mask": ("0-1", "mean predicted probability inside the mask"),
+}
+
 
 def one(job):
     isic_id, img_path, mask_path = job
@@ -61,9 +76,8 @@ def main(opts):
     table = meta.merge(feats, on="isic_id", how="left")
     if opts.quality:
         q = pd.read_csv(opts.quality)
-        keep = ["isic_id", "mask_quality", "unet_sam_dice", "unet_area_ratio", "unet_border_touch",
-                "unet_boundary_uncertainty"]
-        table = table.merge(q[keep], on="isic_id", how="left")
+        keep = [c for c in QA_COLUMNS if c in q.columns]
+        table = table.merge(q[["isic_id"] + keep], on="isic_id", how="left")
     table.insert(5, "feature_version", fx.FEATURE_VERSION)
     out = Path(opts.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +85,12 @@ def main(opts):
 
     feature_cols = [c for c in table.columns if c.split("_")[0] in fx.CONCEPT_GROUPS and c in fx.FEATURE_DICTIONARY]
     dictionary = pd.DataFrame([{"feature": k, "group": v[0], "concept": fx.CONCEPT_GROUPS[v[0]], "units": v[1],
-                                "meaning": v[2], "version": fx.FEATURE_VERSION} for k, v in fx.FEATURE_DICTIONARY.items()])
+                                "meaning": v[2], "version": fx.FEATURE_VERSION} for k, v in fx.FEATURE_DICTIONARY.items()]
+                              + [{"feature": k, "group": "QA", "concept": "mask quality (not a model feature)", "units": u,
+                                  "meaning": m, "version": fx.FEATURE_VERSION} for k, (u, m) in QA_COLUMNS.items()
+                                 if k in table.columns]
+                              + [{"feature": k, "group": "QA", "concept": "framing (not a model feature)", "units": "0-1",
+                                  "meaning": m, "version": fx.FEATURE_VERSION} for k, m in fx.FRAME_COLUMNS.items()])
     dictionary.to_csv(out.with_name(f"feature_dictionary_{fx.FEATURE_VERSION}.csv"), index=False)
     manifest = {"feature_version": fx.FEATURE_VERSION, "lesion_side": fx.LESION_SIDE,
                 "crop_margin": fx.CROP_MARGIN, "shades_of_gray_p": fx.SOG_P, "split": opts.split, "n_rows": len(table),

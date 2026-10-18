@@ -30,6 +30,8 @@ for m in "${MODELS[@]}"; do
   echo "== downloading $m"
   hf download "$m" --exclude "*.pth" --exclude "original/*" --exclude "consolidated*"
 done
+echo "== downloading the NLI claim-check model (explain/nli_check.py)"
+hf download MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli
 du -sh "$HF_HOME"
 echo "Setup done. Copy trees/output_v0.2/explanation_inputs.jsonl to $REPO/trees/output_v0.2/ and run:"
 echo "  sbatch --account=def-omar12 slurm/rorqual_llm.sh"
