@@ -176,7 +176,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
   - concept activation vectors (TCAV-style), or
   - WhyLesionCLIP text-concept similarity.
   If none of these is reliable, label these features "learned visual pattern (not clinically mapped)" instead of inventing a concept.
-- ☐ **T3.5** Send the concept map and phrase bank for clinical review (→ M-6). The prior texture definitions were never checked by a clinician. *(D3)*
+- ◐ **T3.5** Send the concept map and phrase bank for clinical review (→ M-6). The prior texture definitions were never checked by a clinician. *(D3)* *2026-10-18: review package ready in English and Quebec French: `explain/lang_fr.py` (French twin of the template layer, draft), `concepts/avoided_terms.py` (15 avoided-term entries with reason, evidence, preferred wording and EN/FR stems; `hits()` checker, clean on 592 real Qwen explanations) -> `concepts/output/clinical_review_v1_en_fr.md`. French is not shown to anyone before the reviewer approves it.*
 
 ### WS4: LLM setup and input structuring (M1 W3 → M2 W6)
 
@@ -237,7 +237,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
     3. Plus Grad-CAM *or* plus the NL explanation. Arm order is counterbalanced across clinicians.
   - **Ratings (5-point):** clinical relevance, trustworthiness, clarity. Also: "does this support or change your judgment?" and free text.
   - Include wrong-prediction cases to measure automation bias.
-- ◐ **T7.3** Materials: rating form (Google Form or a simple web page), Grad-CAM images from S1's ResNet50 (→ S1-7), and a clinician instruction sheet. *2026-10-02: Grad-CAM arm built on the predicted class (P1-16); deletion AUC 0.656 vs 0.641 for random order, i.e. not faithful; 33% of CAM mass on the lesion (22% of the image).*
+- ◐ **T7.3** Materials (2026-10-18: Poly-Opinion, Polytechnique's LimeSurvey, chosen over a custom platform; `eval/clinician_study/build_survey.py` builds the stratified case set, per-rater counterbalancing, answer key, bilingual LimeSurvey import file and an offline HTML preview; 5-case pilot in `eval/output/clinician_study_pilot/`; import not yet tested in Poly-Opinion): rating form (Google Form or a simple web page), Grad-CAM images from S1's ResNet50 (→ S1-7), and a clinician instruction sheet. *2026-10-02: Grad-CAM arm built on the predicted class (P1-16); deletion AUC 0.656 vs 0.641 for random order, i.e. not faithful; 33% of CAM mass on the lesion (22% of the image).*
 - ☐ **T7.4** Recruit and schedule clinicians (→ M-7). Target ≥ 3 dermatologists; hold sessions in M3 W11–12.
 - ☐ **T7.5** Analysis: descriptive statistics per arm and stratum, inter-rater agreement, qualitative themes. Feed the findings back into the prompts and concept map. *(D6)*
 
