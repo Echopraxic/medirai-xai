@@ -32,7 +32,7 @@ PHRASES = {
     "C_frac_dark_brown": ("share of dark-brown areas", "high", "low"),
     "C_frac_blue_gray": ("share of blue-gray areas", "high", "low"),
     "C_frac_black": ("share of black areas", "high", "low"),
-    "C_n_colors": ("number of distinct colors", "high", "low"),
+    "C_n_colors": ("color variety", "high", "low"),  # no colour count until validated (NOT_PHRASED in treeshap_top3)
     "C_color_entropy": ("color variety", "high", "low"),
     "C_color_std": ("color variation", "high", "low"),
     "C_deltaE_vs_skin": ("color contrast with surrounding skin", "high", "low"),
