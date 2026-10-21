@@ -47,7 +47,7 @@ def main(opts):
     out.mkdir(parents=True, exist_ok=True)
 
     split = pd.read_csv(ROOT / "splits" / opts.split)
-    ids = split.loc[split.split != "excluded", "isic_id"].tolist()
+    ids = split.loc[split.split != "excluded", opts.id_column].tolist()
     rows = []
     for n, isic_id in enumerate(ids, 1):
         img = Image.open(Path(opts.images) / f"{isic_id}.jpg").convert("RGB")
@@ -56,7 +56,7 @@ def main(opts):
         Image.fromarray((mask * 255).astype(np.uint8)).save(out / f"{isic_id}.png")
         area = int(mask.sum())
         uncertain = ((prob > 0.3) & (prob < 0.7)).sum()
-        rows.append({"isic_id": isic_id, "unet_area_ratio": area / mask.size, "unet_components": n_comp,
+        rows.append({opts.id_column: isic_id, "unet_area_ratio": area / mask.size, "unet_components": n_comp,
                      "unet_border_touch": border_touch_fraction(mask), "unet_solidity": solidity(mask),
                      "unet_boundary_uncertainty": float(uncertain / max(area, 1)),
                      "unet_mean_prob_in_mask": float(prob[mask].mean()) if area else 0.0})
@@ -72,4 +72,5 @@ if __name__ == "__main__":
     ap.add_argument("--images", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--split", default="isic_clinical_v2.csv", help="file name under splits/")
+    ap.add_argument("--id_column", default="isic_id", help="image id column of the split (midas_v1.csv: image_id)")
     main(ap.parse_args())
