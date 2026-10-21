@@ -3,7 +3,7 @@ ResNet50 with a diagnosis-class head instead of benign/malignant (classifier imp
 
 The binary model sees melanoma only as part of "malignant" (BCC is 4x more common), and its melanoma recall at the
 default threshold is ~0.5. This trains the same backbone, preprocessing and split (split v2, uncertaintyNet's
-ResNet50Hidden + medirv2_transforms) on 7 classes, with class-weighted cross-entropy (inverse sqrt frequency):
+ResNet50Hidden + medirv2_transforms; --split_file for split v4) on 7 classes, with class-weighted cross-entropy (inverse sqrt frequency):
 
     BCC, SCC, Melanoma, Other-malignant | Nevus, SK, Other-benign
 
@@ -76,7 +76,7 @@ def main(opts):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cfg = json.loads((ROOT / "uncertaintyNet-main/configs/medir_v2.json").read_text())
     data_dir = str(Path(opts.dataset_path) / "ISIC_clinical")
-    df = dataset.load_split(str(ROOT / "splits/isic_clinical_v2.csv"), data_dir)
+    df = dataset.load_split(str(ROOT / "splits" / opts.split_file), data_dir)
     train_tf, test_tf = dataset.medirv2_transforms(224)
     parts = {s: df[df.split == s].reset_index(drop=True) for s in ["train", "val", "test"]}
     if opts.limit:
@@ -164,4 +164,5 @@ if __name__ == "__main__":
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0, help="smoke test: this many images per split")
+    ap.add_argument("--split_file", default="isic_clinical_v2.csv", help="file under splits/ (stage B: v4)")
     main(ap.parse_args())
