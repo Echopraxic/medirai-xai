@@ -370,6 +370,86 @@ def model_comparison_section():
     return "\n\n".join(out)
 
 
+def external_section():
+    """External tests (eval/external_test.py): locked sets scored once per candidate; MIDAS dev_val = selection data."""
+    out = ["## External tests (locked sets; MIDAS dev_val is selection data)"]
+    rels = []
+    for name in ("isic_overview", "mcr_sl", "ddi", "ddi2", "midas_dev_val"):
+        rel = f"eval/output/external/{name}/external_report.json"
+        r = load(rel)
+        if not r:
+            continue
+        rels.append(rel)
+        rows = []
+        for tag, v in r["runs"].items():
+            e = v["external"]
+            rows.append({"run": tag, "n images": e["n_images"], "AUROC": fmt(e["AUROC"]["value"]),
+                         "95% CI": "[{:.2f}, {:.2f}]".format(*e["AUROC"]["ci95"]),
+                         "malignant recall": fmt(e["malignant recall"]["value"]),
+                         "benign recall": fmt(e["benign recall"]["value"]),
+                         "deferred": fmt(e["deferred share (internal val p75 entropy)"], pct=True),
+                         "entropy AUROC errors": fmt(e["entropy AUROC for errors"])})
+        out.append(f"**{name}** ({r['note']})\n\n" + table(rows, list(rows[0])))
+    looks = ROOT / "eval/output/external/looks.csv"
+    if looks.exists():
+        n = pd.read_csv(looks).source.value_counts().to_dict()
+        out.append("Looks at the locked sets so far (`eval/output/external/looks.csv`): "
+                   + ", ".join(f"{k} {v}" for k, v in sorted(n.items())))
+    out.append(src(*rels))
+    return "\n\n".join(out)
+
+
+def sprint_section():
+    """Classifier sprint (prereg 2026-10-21): stage A and stage-B selection scores (selection data only)."""
+    out = ["## Classifier sprint: selection score S = mean(internal val AUROC, MIDAS dev_val AUROC)"]
+    rels = []
+    for rel, title in (("eval/output/stage_a/preprocess_ablation/summary.md", "Stage A1, test-time preprocessing"),
+                       ("eval/output/stage_a/probes/summary.md", "Stage A3, frozen-embedding probes")):
+        if (ROOT / rel).exists():
+            rels.append(rel)
+            body = (ROOT / rel).read_text(encoding="utf-8").split("\n\n", 1)[1]
+            out.append(f"**{title}**\n\n" + body.strip())
+    scores = sorted(ROOT.glob("uncertaintyNet-main/output/*/**/selection_score.json"))
+    rows = []
+    for p in scores:
+        r = json.loads(p.read_text())
+        at = r["internal_val_at_t"]
+        rows.append({"run": p.relative_to(ROOT / "uncertaintyNet-main/output").parts[0], "S (TTA)": fmt(r["S"]),
+                     "S (no TTA)": fmt(r["S_no_tta"]), "internal val AUROC": fmt(r["internal_val_auroc_tta"]),
+                     "MIDAS dev_val AUROC": fmt(r["midas_dev_val_auroc_tta"]),
+                     "sens / spec / melanoma @ t": f"{at['sensitivity']:.2f} / {at['specificity']:.2f} / "
+                                                   f"{at.get('melanoma_recall', float('nan')):.2f}"})
+    if rows:
+        out.append("**Stage B, per run** (`eval/selection_score.py`; 3 seeds per arm, compare arm means)\n\n"
+                   + table(rows, list(rows[0])))
+        rels += [p.relative_to(ROOT).as_posix() for p in scores]
+    out.append(src(*rels))
+    return "\n\n".join(out)
+
+
+def judge_section():
+    """LLM-as-judge (explain/llm_judge.py): planted-error recall, clean specificity, claim labels per arm."""
+    out = ["## LLM judges (T6.4)"]
+    rels, rows = [], []
+    for rel in sorted(p.relative_to(ROOT).as_posix() for p in ROOT.glob("explain/output/judge_*/*/judge_summary.json")):
+        s = load(rel)
+        if not all(a["parse_ok"] >= 0.9 for a in s["arms"].values()):
+            continue  # void runs (e.g. the 2026-10-18 Gemma run) are kept on disk but not reported
+        rels.append(rel)
+        c = s["controls"]
+        rows.append({"judge": Path(rel).parent.name, "clean specificity": fmt(c["clean"]["specificity"]),
+                     **{f"recall {k.replace('_', ' ')}": fmt(v["recall"]) for k, v in c.items()
+                        if k not in ("base_arms", "clean")},
+                     **{f"supported: {a.split('__')[0]}": fmt(v["claim_labels"].get("supported"))
+                        for a, v in s["arms"].items()}})
+    if rows:
+        out.append(table(rows, list(rows[0])))
+    out.append("Judge direction labels are not used (H3): both judges override benign-typical values that support "
+               "malignant with their own clinical prior.")
+    out.append(src(*rels))
+    return "\n\n".join(out)
+
+
 def main(opts):
     try:
         commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True,
@@ -383,7 +463,8 @@ def main(opts):
         "Numbers are read from the output files named under each section. Older outputs (e.g. features v0.2, "
         "the split-v1 ResNet50) are labelled as such; re-run the pipeline step to refresh them.",
         criteria_section(runs), baseline_section(), masks_section(), trees_section(), concepts_section(),
-        llm_section(runs), c6_gradcam_section(), new_checks_section(), d5_section(), model_comparison_section(),
+        llm_section(runs), c6_gradcam_section(), new_checks_section(), d5_section(), judge_section(),
+        model_comparison_section(), external_section(), sprint_section(),
     ]
     out = Path(opts.out)
     out.write_text("\n\n".join(parts) + "\n", encoding="utf-8", newline="\n")
