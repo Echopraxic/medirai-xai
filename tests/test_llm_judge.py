@@ -84,3 +84,13 @@ def test_mock_run_sheet_and_agree(tmp_path):
 def test_cohen_kappa():
     assert J.cohen_kappa([1, 0, 1, 0], [1, 0, 1, 0]) == 1.0
     assert J.cohen_kappa([1, 1, 0, 0], [1, 0, 1, 0]) == 0.0
+
+
+def test_gemma_judge_forces_compact_json_and_unparseable_runs_fail():
+    # 2026-10-18 Gemma run: free whitespace under JSON-schema decoding -> newlines to max_new_tokens, parse_ok 0
+    g = J.judge_engine_kwargs("google/gemma-3-27b-it")
+    assert g["structured_outputs_config"] == {"backend": "xgrammar", "disable_any_whitespace": True} and g["dtype"] == "bfloat16"
+    l = J.judge_engine_kwargs("casperhansen/llama-3.3-70b-instruct-awq")
+    assert "structured_outputs_config" not in l and l["dtype"] == "auto"   # Llama run stays reproducible
+    summary = {"arms": {"a": {"parse_ok": 1.0}, "b": {"parse_ok": 0.0}}}
+    assert J.parse_failures(summary) == {"b": 0.0}
