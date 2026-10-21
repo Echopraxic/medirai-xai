@@ -14,7 +14,7 @@ feature attributions ever reach a language model: no images, metadata or identif
 ## Layout
 
 ```
-splits/        persisted lesion/patient-grouped split (isic_clinical_v2.csv) + builders + public ISIC metadata
+splits/        persisted lesion/patient-grouped splits (v2 reference, v4 = v2 + MIDAS phone photos, MIDAS split) + builders
 uncertaintyNet-main/  ResNet50 training/testing: deterministic and variational (train.py, test.py, configs/)
 segmentation/  lesion masks: ResNet18-UNet, SAM second opinion, clinical fine-tune, gold set + annotation tool, QA flag
 features/      concept-aligned handcrafted features (A/B/C, texture, shape) -> versioned feature table + dictionary
@@ -22,8 +22,9 @@ trees/         one-vs-all and binary XGBoost trees, surrogate of the ResNet50, T
 explain/       number-free LLM input, prompts, template baseline, LLM generation (vLLM), rule-based verifier
 concepts/      concept validation against ENHANCE, MILK10k MONET and Derm7pt (incl. a VLM concept checker)
 eval/          prediction export, baseline + uncertainty/deferral tables, Grad-CAM arm, wrong-prediction study
-tools/         image cache, results collector
-slurm/         Rorqual (Calcul Québec) job scripts; see slurm/README.md
+tools/         image cache, ISIC and Redivis downloaders, results collector
+classifier/    extra classifier heads: 7-class diagnosis head, foundation-model linear probes
+slurm/         Rorqual / Narval (Calcul Québec) job scripts; see slurm/README.md
 tests/         CPU regression tests (python -m pytest tests -q)
 poc-nrc-main/  legacy NRC CNN/foundation-model ensemble (P0-fixed; models must be retrained before reuse)
 ```
@@ -35,7 +36,8 @@ poc-nrc-main/  legacy NRC CNN/foundation-model ensemble (P0-fixed; models must b
 | Split | `splits/isic_clinical_v2.csv` | 6,743 images, 70/10/20 grouped by lesion and patient, seed 42. v1 minus the 1,240 MSKCC images (unbiopsied, contact-like photos that formed a benign shortcut). Never re-split; new data becomes a new version |
 | Lesion masks | clinical fine-tuned ResNet18-UNet | Chosen on 97 hand-traced gold masks (`segmentation/gold/`); quality flag `quality_flag_v1` |
 | Feature table | `features/output/feature_table_v1.0.parquet` | 42 features; `mask_quality` and the other QA columns are never model inputs |
-| Explained model | deterministic ResNet50 | Re-baselined on split v2 (`configs/medir_v2.json`) |
+| Explained model | deterministic ResNet50 | Split v2, lr 3e-4, seed 0, with 8-view test-time augmentation (interim, until the classifier sprint's model is frozen). Split v3 (v2 + ISIC dermoscopic images in train) was dropped: better internally, worse on external sets |
+| Classifier evaluation | locked external sets + selection data | DDI, DDI-2, MCR-SL and ISIC clinical overview are scored only for final candidates (`eval/external_test.py --final`, every look logged). Model choices use split v2 val + MIDAS dev_val (`eval/selection_score.py`) |
 
 Generated files (images, masks, feature tables, model outputs) are not in git; each script below rebuilds them.
 
@@ -77,6 +79,7 @@ python explain/attach_deferral.py --inputs trees/output_v1.0/explanation_inputs.
     --out trees/output_v1.0/explanation_inputs_deferral.jsonl   # optional: S1-4 deferral flag as the "uncertain" signal
 python explain/llm_generate.py --inputs trees/output_v1.0/explanation_inputs.jsonl --backend template --out explain/output
 python explain/compare_runs.py explain/output/<run_folder>
+# D5 checks (counterfactuals, consistency, NLI) and the LLM judges run on GPU: slurm/rorqual_llm_d5.sh, slurm/narval_llm_judge.sh
 
 # 5. concept validation and the wrong-prediction / Grad-CAM studies
 python concepts/validate_enhance.py
@@ -86,7 +89,13 @@ python eval/gradcam_arm.py --run <run_dir> --dataset-path uncertaintyNet-main/da
 python eval/wrong_prediction_study.py --inputs trees/output_v1.0/explanation_inputs.jsonl \
     --gradcam eval/output/gradcam/gradcam_metrics.csv --predictions <run_dir>/predictions.csv --out eval/output/c6
 
-# 6. collect every headline number into a local results page (RESULTS.md, not committed)
+# 6. classifier sprint: external data, splits, selection score (GPU jobs: slurm/narval_stage_b.sh)
+python tools/download_redivis.py --out <dir> <redivis dataset refs>      # MRA-MIDAS, DDI, DDI-2 (Narval login node)
+python splits/make_midas_split.py && python splits/make_split_v4.py
+python eval/selection_score.py --run <run_dir>                            # split v2 val + MIDAS dev_val, with TTA
+python eval/external_test.py --source midas --runs <run_dir> ...          # locked sets need --final '<reason>'
+
+# 7. collect every headline number into a local results page (RESULTS.md, not committed)
 python tools/make_results.py
 ```
 
@@ -96,8 +105,10 @@ Each script's docstring lists its full options and outputs.
 
 - Python 3.12 (3.13 works locally). `pip install -r requirements.txt` after installing torch/torchvision for your CUDA;
   `requirements-nrc.txt` adds the NRC ensemble's dependencies.
-- GPU work runs on the Alliance clusters (Rorqual H100, Narval A100) through `slurm/`; see [slurm/README.md](slurm/README.md). A 4 GB laptop GPU can train
-  with `--batch_size 32 --grad_accum 4 --amp --no_compile`.
+- GPU work runs on the Alliance clusters (Narval A100 by default, Rorqual H100) through `slurm/`; see
+  [slurm/README.md](slurm/README.md). A 4 GB laptop GPU can train with `--batch_size 32 --grad_accum 4 --amp --no_compile`.
+- Data licences: most ISIC images are CC-BY-NC and the Stanford AIMI sets are research-only. Licence columns are kept per
+  image so a commercial-safe subset can be selected.
 - Reproducibility: seeds are pinned; the split, feature table and prompts are versioned; every LLM run logs the model,
   prompt version and hash, decoding parameters and input hash.
 

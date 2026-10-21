@@ -31,8 +31,10 @@ SHATHA_HANDOFF.md
 SHATHA_NOTE_*.md
 S2_PAPER_PROPOSAL.md
 S2_PAPER_PREREG_*.md
+S2_CLASSIFIER_PREREG_*.md
 S2_EXECUTION_TODO.md
 S2_DATASET_SURVEY.md
+S2_CLASSIFIER_PLAN.md
 RESULTS.md
 docs/archive/
 splits/*_report.md
@@ -43,3 +45,8 @@ uncertaintyNet-main/log_runs.csv
 output_*/
 DERMATOLOGIST_REQUEST.md
 MEDIRAI_EMAIL_*.md
+# Stanford AIMI (MRA-MIDAS) research-use terms: no redistribution of data or derived metadata; rebuild with
+# splits/make_midas_split.py and splits/make_split_v4.py from the Redivis download
+splits/midas_v1.csv
+splits/isic_v4_clinical_plus_midas.csv
+ABUSITTA_EMAIL_*.md
