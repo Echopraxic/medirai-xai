@@ -45,6 +45,32 @@ def grouped(shap_df, feats):
     return pd.DataFrame({g: shap_df[[f for f in feats if f[0] == g]].sum(1) for g in groups})
 
 
+def strength_bucket(v, thresholds):
+    """|grouped SHAP| -> strong/moderate/weak, cut at the validation tertiles (t1, t2)."""
+    v, (t1, t2) = abs(v), thresholds
+    return "strong" if v >= t2 else ("moderate" if v >= t1 else "weak")
+
+
+def benign_percentile(ref_sorted, value):
+    return float(np.searchsorted(ref_sorted, value) / max(len(ref_sorted), 1) * 100)
+
+
+def case_reasons(group_row, signed_row, values, feats, ref, thresholds):
+    """Top-3 concept groups of one case -> reason dicts. group_row: grouped signed SHAP (index = group letters);
+    signed_row: per-feature SHAP toward the predicted class; values: feature values; ref: sorted benign train values."""
+    reasons = []
+    for grp in group_row.abs().nlargest(3).index:
+        gval = group_row[grp]
+        members = [f for f in feats if f[0] == grp]
+        fid = representative(signed_row[members] * np.sign(gval))
+        value = float(values[fid])
+        reasons.append({"concept": GROUP_NAMES[grp], "group": grp, "feature_id": fid,
+                        "direction": "supports" if gval > 0 else "argues_against",
+                        "strength": strength_bucket(gval, thresholds), "grouped_shap": round(float(gval), 4),
+                        "feature_value": round(value, 4), "benign_percentile": round(benign_percentile(ref[fid], value), 1)})
+    return reasons
+
+
 def top3_sets(signed_groups):
     return [frozenset(r.abs().nlargest(3).index) for _, r in signed_groups.iterrows()]
 
@@ -71,9 +97,6 @@ def main(opts):
     # strength tertiles from validation top-3 magnitudes
     val_mag = np.concatenate([r.abs().nlargest(3).values for _, r in g[df.split == "val"].iterrows()])
     t1, t2 = np.quantile(val_mag, [1 / 3, 2 / 3])
-    def strength(v):
-        v = abs(v)
-        return "strong" if v >= t2 else ("moderate" if v >= t1 else "weak")
 
     # benign training reference for percentiles
     train_tab = table[(table.split == "train") & (table.label == 0)]
@@ -101,24 +124,12 @@ def main(opts):
 
     lines = []
     for i, r in df[df.split.isin(["val", "test"])].iterrows():
-        top = g.loc[i].abs().nlargest(3).index
-        reasons = []
-        for grp in top:
-            gval = g.loc[i, grp]
-            members = [f for f in feats if f[0] == grp]
-            contrib = signed.loc[i, members] * np.sign(gval)
-            fid = representative(contrib)
-            value = float(df.loc[i, fid])
-            pct = float(np.searchsorted(ref[fid], value) / max(len(ref[fid]), 1) * 100)
-            reasons.append({"concept": GROUP_NAMES[grp], "group": grp, "feature_id": fid,
-                            "direction": "supports" if gval > 0 else "argues_against",
-                            "strength": strength(gval), "grouped_shap": round(float(gval), 4),
-                            "feature_value": round(value, 4), "benign_percentile": round(pct, 1)})
+        reasons = case_reasons(g.loc[i], signed.loc[i], df.loc[i], feats, ref, (t1, t2))
         # ungrouped top-3 features (raw SHAP toward the prediction): input for the F-raw encoding (explain/encodings.py)
         top_feats = signed.loc[i, feats].abs().nlargest(3).index
         raw_top = [{"feature_id": f, "group": f[0], "shap": round(float(signed.loc[i, f]), 4),
                     "feature_value": round(float(df.loc[i, f]), 4),
-                    "benign_percentile": round(float(np.searchsorted(ref[f], df.loc[i, f]) / max(len(ref[f]), 1) * 100), 1)}
+                    "benign_percentile": round(benign_percentile(ref[f], df.loc[i, f]), 1)}
                    for f in top_feats]
         payload = {
             "prediction": "malignant" if r.resnet_pred == 1 else "benign",

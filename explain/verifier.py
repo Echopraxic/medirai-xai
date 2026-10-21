@@ -138,6 +138,15 @@ def verify(llm_input, raw, allowed_numbers=None):
     return res
 
 
+def failed_rules(res):
+    """Names of the rules a verify() result fails (the complement of pass_all)."""
+    if not res.get("schema_ok"):
+        return ["parse_or_schema"]
+    failed = [k for k in ("grounding", "coverage", "direction") if res[k] < 1.0]
+    failed += [] if res["uncertainty_ok"] else ["uncertainty"]
+    return failed + [k for k in ("invented_terms", "digits", "named_diagnosis", "advice") if res[k]]
+
+
 def summarize(results):
     """Aggregate per-explanation results into the C3/C4/C5 rates."""
     import numpy as np
