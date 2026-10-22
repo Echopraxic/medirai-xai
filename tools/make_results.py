@@ -495,6 +495,41 @@ def interpretability_section():
     return "\n\n".join(out)
 
 
+def final_model_section():
+    """Final model of the classifier sprint (eval/final_model_report.py, eval/final_locked_look.py)."""
+    rel_a, rel_b = "eval/output/stage_c/final/final_model_report.json", "eval/output/stage_c/locked_final/locked_final.json"
+    a, b = load(rel_a), load(rel_b)
+    if not a:
+        return "## Final model (classifier sprint)" + chr(10) + chr(10) + "Not run yet."
+    out = ["## Final model (classifier sprint, stage C)",
+           f"Run `{a['run']}`; temperature {a['temperature']:.2f}, standard threshold {a['threshold_standard']:.3f}, "
+           f"melanoma-head threshold {a['threshold_melanoma_head']:.3f} (all fit on validation data)."]
+    rows = []
+    for n in ("v2_val", "v2_test", "midas_dev_val", "midas_dev_test"):
+        x = a[n]
+        s, m = x["standard"], x.get("melanoma_sensitive", {})
+        rows.append({"set": n, "n": x["n"], "AUROC": fmt(x["auroc"]), "ECE": fmt(x["ece"]),
+                     "sens / spec": f"{s['sensitivity']:.2f} / {s['specificity']:.2f}",
+                     "melanoma recall (standard / melanoma mode)": f"{s['melanoma_recall']:.2f} / {m.get('melanoma_recall', float('nan')):.2f}",
+                     "accuracy at 30% deferral": fmt(x["retained_accuracy_at_30pct_deferral"])})
+    out.append(table(rows, list(rows[0])))
+    if b:
+        rows = []
+        for s_, v in b["sets"].items():
+            p = v["paired_vs_v2_seed0"]["AUROC"]
+            rows.append({"locked set": s_, "AUROC [95% CI]": fmt(v["AUROC"]["value"]) + " [{:.2f}, {:.2f}]".format(*v["AUROC"]["ci95"]),
+                         "v2 seed 0": fmt(v["baseline_v2_seed0_auroc"]), "paired diff": f"{p['diff']:+.3f}" + ("*" if p["significant"] else ""),
+                         "ECE": fmt(v["ece_calibrated"]), "entropy AUROC for errors": fmt(v["entropy AUROC for errors"])})
+        out.append("**Locked external sets, one look** (paired bootstrap vs v2 seed 0; * = CI excludes 0)" + chr(10) + chr(10)
+                   + table(rows, list(rows[0])))
+        k = b["k"]
+        out.append(f"K6 mean AUROC {k['K6_mean_auroc']:.3f} (baseline {k['K6_baseline_v2_seed0']:.3f}); DDI by tone "
+                   + ", ".join(f"{g} {v:.2f}" for g, v in k["K7_ddi_auroc_by_tone"].items())
+                   + f"; mean entropy AUROC for errors {k['K8_entropy_auroc_for_errors_mean']:.2f}.")
+    out.append(src(rel_a, *( [rel_b] if b else [] )))
+    return chr(10).join(out[:2] + [chr(10).join([out[2]])] + out[3:]) if False else (chr(10) + chr(10)).join(out)
+
+
 def main(opts):
     try:
         commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True,
@@ -509,7 +544,7 @@ def main(opts):
         "the split-v1 ResNet50) are labelled as such; re-run the pipeline step to refresh them.",
         criteria_section(runs), baseline_section(), masks_section(), trees_section(), concepts_section(),
         llm_section(runs), c6_gradcam_section(), new_checks_section(), d5_section(), judge_section(),
-        model_comparison_section(), external_section(), sprint_section(), interpretability_section(),
+        model_comparison_section(), external_section(), sprint_section(), final_model_section(), interpretability_section(),
     ]
     out = Path(opts.out)
     out.write_text("\n\n".join(parts) + "\n", encoding="utf-8", newline="\n")
