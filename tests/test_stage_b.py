@@ -57,3 +57,24 @@ def test_threshold_for_sensitivity_hits_target():
     p = np.r_[rng.uniform(0.3, 1, 200), rng.uniform(0, 0.7, 100)]
     t = threshold_for_sensitivity(y, p)
     assert (p[y == 1] >= t).mean() >= 0.90 and (p[y == 1] >= t + 1e-9).mean() < 0.90 + 0.01
+
+
+def test_derm7pt_labels_follow_isic_conventions():
+    from make_split_v5 import d7_label
+    assert d7_label("melanoma (in situ)") == ("Melanoma in situ", 1)
+    assert d7_label("melanoma (less than 0.76 mm)") == ("Melanoma Invasive", 1)
+    assert d7_label("melanoma") == ("Melanoma, NOS", 1)
+    assert d7_label("basal cell carcinoma") == ("Basal cell carcinoma", 1)
+    assert d7_label("reed or spitz nevus") == ("Nevus", 0) and d7_label("clark nevus") == ("Nevus", 0)
+    assert d7_label("seborrheic keratosis") == ("Seborrheic keratosis", 0)
+    assert d7_label("miscellaneous") == (None, None)
+
+
+@pytest.mark.skipif(not (ROOT / "splits/isic_v6_v4_plus_melanoma.csv").exists(), reason="split v6 not built")
+def test_split_v6_adds_melanoma_data_to_train_only():
+    v4 = pd.read_csv(ROOT / "splits/isic_v4_clinical_plus_midas.csv")
+    v6 = pd.read_csv(ROOT / "splits/isic_v6_v4_plus_melanoma.csv")
+    new = v6[~v6.isic_id.isin(v4.isic_id)]
+    assert set(new.split) == {"train"} and set(new.source) == {"Derm7pt", "Asan", "SNU"}
+    for s in ("val", "test", "dev_test"):     # selection and test rows unchanged
+        assert set(v6.loc[v6.split == s, "isic_id"]) == set(v4.loc[v4.split == s, "isic_id"])

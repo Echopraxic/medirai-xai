@@ -14,6 +14,10 @@
 #   batch 2 (classifier/train_sprint.py; hygiene = AdamW + label smoothing 0.1 + EMA 0.999):
 #   ARM=hyg | hyg384 (+384 px) | distill (+DINOv2 feature distillation) | distill_v4 (+ split v4) | photo (+ phone /
 #       darker-skin photometric augmentation) | dinov2 (DINOv2-L fine-tune; comparison only, never the product model)
+#   stage C (decision 2026-10-22): ARM=kd | kd_v4 (split v4: the teacher also labels the MIDAS phone photos):
+#       one ResNet50 distilled from the 12-model ensemble (ref, hyg, distill, photo arms; 3 seeds each)
+#   batch 4 (on the kd_v4 student, decision 2026-10-22): ARM=kdv4_mel (+ melanoma head) | kdv6 (+ Derm7pt/Asan/SNU
+#       melanoma data, split v6) | kdv6_mel (both)
 #   ARM=score RUN=<run folder under uncertaintyNet-main/output>   selection score of an existing run only
 #
 #   for a in v4 v4bal v4mc; do for s in 0 1 2; do
@@ -66,6 +70,20 @@ case "$ARM" in
     cd "$REPO"
     python classifier/train_multiclass.py --dataset-path "$DATA" --out "uncertaintyNet-main/output/$TAG/run" \
       --seed "$SEED" --lr "$LR" --epochs "$EPOCHS" --workers 8 --split_file isic_v4_clinical_plus_midas.csv
+    score "$TAG/run" ;;
+  kd|kd_v4|kdv4_mel|kdv6|kdv6_mel)
+    T=narval_stageb
+    TEACHERS=rorqual_v2_lr3e-4_20261014/resnet50_det/run,narval_v2_seed1_lr3e-4_20261018/resnet50_det/run,${T}_ref_s2_20261021/resnet50_det/run
+    for a in hyg distill photo; do for s in 0 1 2; do TEACHERS=$TEACHERS,${T}_${a}_s${s}_20261021/run; done; done
+    case "$ARM" in
+      kd)       A=() ;;
+      kd_v4)    A=(--split_file isic_v4_clinical_plus_midas.csv) ;;
+      kdv4_mel) A=(--split_file isic_v4_clinical_plus_midas.csv --mel_head 0.5) ;;
+      kdv6)     A=(--split_file isic_v6_v4_plus_melanoma.csv) ;;
+      kdv6_mel) A=(--split_file isic_v6_v4_plus_melanoma.csv --mel_head 0.5) ;;
+    esac
+    cd "$REPO"
+    python classifier/train_sprint.py --dataset-path "$DATA" --out "uncertaintyNet-main/output/$TAG/run"       --lr "$LR" --epochs "$EPOCHS" --optimizer adamw --label_smoothing 0.1 --ema 0.999 --offline --workers 8       --seed "$SEED" --teacher_runs "$TEACHERS" --kd_alpha 0.7 --kd_T 2 "${A[@]}"
     score "$TAG/run" ;;
   hyg|hyg384|distill|distill_v4|photo|dinov2)
     HYG=(--optimizer adamw --label_smoothing 0.1 --ema 0.999 --offline --workers 8 --seed "$SEED")

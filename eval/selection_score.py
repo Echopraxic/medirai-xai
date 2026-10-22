@@ -63,13 +63,29 @@ def load_net(run):
 
 @torch.no_grad()
 def p_malignant(net, kind, tf, paths, device, tta, batch_size=32):
-    out = []
+    out, mel = [], []
     logits_of = (lambda x: net(x)[0]) if kind == "sprint" else net
+    has_mel = kind == "sprint" and getattr(net, "mel_head", None) is not None
     for i in range(0, len(paths), batch_size):
         x = torch.stack([tf(Image.open(p).convert("RGB")) for p in paths[i:i + batch_size]]).to(device)
-        probs = torch.stack([F.softmax(logits_of(v(x)).float(), -1) for v in (DIHEDRAL if tta else DIHEDRAL[:1])]).mean(0)
+        views = DIHEDRAL if tta else DIHEDRAL[:1]
+        probs = torch.stack([F.softmax(logits_of(v(x)).float(), -1) for v in views]).mean(0)
         out.append((probs[:, :MALIGNANT_CLASSES].sum(1) if kind == "multiclass" else probs[:, 1]).cpu().numpy())
+        if has_mel:
+            mel.append(torch.stack([torch.sigmoid(net.mel_head(net(v(x))[1].float()).squeeze(1)) for v in views]).mean(0).cpu().numpy())
+    p_malignant.last_mel = np.concatenate(mel) if mel else None
     return np.concatenate(out)
+
+
+def melanoma_mode(y, p, pm, mel, t, target=0.65):
+    """Melanoma-sensitive mode: malignant if p >= t OR p(melanoma) >= tm, with tm the highest-specificity threshold
+    reaching melanoma recall >= target on internal val (chosen there, applied unchanged elsewhere)."""
+    best = None
+    for tm in np.quantile(pm, np.linspace(0.3, 0.995, 140)):
+        pred = (p >= t) | (pm >= tm)
+        if pred[mel].mean() >= target and (best is None or (~pred[y == 0]).mean() > best[1]):
+            best = (float(tm), float((~pred[y == 0]).mean()))
+    return best[0] if best else None
 
 
 def threshold_for_sensitivity(y, p, target=0.90):
@@ -109,14 +125,22 @@ def main(opts):
             p = p_malignant(net, kind, tf, paths, device, tta)
             res[f"{name}_auroc{'_tta' if tta else ''}"] = float(roc_auc_score(y, p))
             if tta:
-                probs[name] = (y, p, mel)
+                probs[name] = (y, p, mel, p_malignant.last_mel)
     res["S"] = (res["internal_val_auroc_tta"] + res["midas_dev_val_auroc_tta"]) / 2
     res["S_no_tta"] = (res["internal_val_auroc"] + res["midas_dev_val_auroc"]) / 2
-    y, p, mel = probs["internal_val"]
+    y, p, mel, pm = probs["internal_val"]
     t = threshold_for_sensitivity(y, p)
     res["threshold_internal_val_sens90"] = t
     res["internal_val_at_t"] = rates(y, p, t, mel)
-    y, p, mel = probs["midas_dev_val"]
+    tm = melanoma_mode(y, p, pm, mel, t) if pm is not None else None
+    if tm is not None:
+        res["melanoma_mode_threshold"] = tm
+        res["melanoma_mode"] = {}
+        for name, (yy, pp, mm, pmm) in probs.items():
+            pred = (pp >= t) | (pmm >= tm)
+            res["melanoma_mode"][name] = {"sensitivity": float(pred[yy == 1].mean()), "specificity": float((~pred[yy == 0]).mean()),
+                                          "melanoma_recall": float(pred[mm].mean())}
+    y, p, mel, _ = probs["midas_dev_val"]
     res["midas_dev_val_at_t"] = rates(y, p, t, mel)
     Path(opts.run, "selection_score.json").write_text(json.dumps(res, indent=1))
     print(json.dumps(res, indent=1))

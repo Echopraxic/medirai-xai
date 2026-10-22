@@ -49,4 +49,6 @@ MEDIRAI_EMAIL_*.md
 # splits/make_midas_split.py and splits/make_split_v4.py from the Redivis download
 splits/midas_v1.csv
 splits/isic_v4_clinical_plus_midas.csv
+splits/isic_v5_*.csv
+splits/isic_v6_*.csv
 ABUSITTA_EMAIL_*.md

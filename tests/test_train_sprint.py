@@ -46,3 +46,22 @@ def test_melanin_darken_reduces_blue_most():
     y = aug(x)
     r, g, b = (y[c].mean().item() for c in range(3))
     assert b < g < r < 0.8 and y.min() >= 0
+
+
+def test_kd_loss_is_zero_when_student_matches_teacher_and_scales_with_t2():
+    import train_sprint as T
+    logits = torch.tensor([[2.0, -1.0], [0.5, 0.3]])
+    for t in (1.0, 2.0):
+        same = torch.softmax(logits / t, 1)
+        assert T.kd_loss(logits, same, t).abs() < 1e-6
+    other = torch.tensor([[0.5, 0.5], [0.9, 0.1]])
+    assert T.kd_loss(logits, other, 2.0) > 0
+
+
+def test_ensemble_teacher_rejects_mismatched_input_size(tmp_path):
+    import json
+    import train_sprint as T
+    (tmp_path / "config.json").write_text(json.dumps({"trainer": "train_sprint", "input_size": 384,
+                                                      "normalization": "medir"}))
+    with pytest.raises(ValueError):
+        T.EnsembleTeacher([str(tmp_path)], input_size=224)

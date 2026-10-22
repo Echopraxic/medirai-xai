@@ -9,6 +9,10 @@ Options (each batch-2 arm changes one thing against the hygiene recipe):
   --input_size 384      higher resolution (B1)
   --distill W           B4: frozen DINOv2-L teacher on the same augmented batch; loss += W * (1 - cos(proj(student
                         penultimate), teacher CLS)). The projection is trained and discarded; the product is a ResNet50.
+  --teacher_runs A,B,.. stage C: distil an ensemble of trained ResNet50 runs into this one (Hinton KD; --kd_alpha,
+                        --kd_T); the teacher sees the same augmented batch, including unlabelled-in-practice MIDAS photos
+  --mel_head W          melanoma head (decision 2026-10-22): a second output p(melanoma) on the penultimate features,
+                        loss += W * BCE (pos_weight = sqrt(neg/pos) on train); enables the melanoma-sensitive mode
   --photo_aug           B2: phone degradations (JPEG 30-90, blur, exposure) + melanin-like darkening (blue reduced
                         more than red; heuristic, applied to the whole image)
 Checkpoint = best val AUROC (val = the split's val rows: split v2 val, or v2 val + MIDAS dev_val for split v4).
@@ -89,14 +93,16 @@ def make_transforms(input_size, stats, photo_aug=False):
 
 # ------------------------------------------------------------------------------------------------ models
 class ResNetBinary(nn.Module):
-    """uncertaintyNet's ResNet50 (same weights init and layout as train.py's det runs); exposes the penultimate."""
-    def __init__(self):
+    """uncertaintyNet's ResNet50 (same weights init and layout as train.py's det runs); exposes the penultimate.
+    mel_head: an extra Linear(2048 -> 1) melanoma logit on the penultimate features (melanoma-sensitive mode)."""
+    def __init__(self, mel_head=False):
         super().__init__()
         from models.model import get_model
         cfg = json.loads((ROOT / "uncertaintyNet-main/configs/medir_v2.json").read_text())["Network"]["Basic Setup"]
         self.net = get_model(dict(cfg, output_size=2, network_type="deterministic"))
         self.pool = next(m for n, m in self.net.named_modules() if n.endswith("avgpool"))
         self.feat_dim = 2048
+        self.mel_head = nn.Linear(self.feat_dim, 1) if mel_head else None
 
     def forward(self, x):
         feats = []  # hook registered per call, so deep copies (EMA) never write into another module
@@ -121,8 +127,14 @@ class DinoBinary(nn.Module):
         return self.head(f), f
 
 
-def build_model(backbone, local_files_only=False):
-    return ResNetBinary() if backbone == "resnet50" else DinoBinary(local_files_only)
+def build_model(backbone, local_files_only=False, mel_head=False):
+    if backbone != "resnet50" and mel_head:
+        raise ValueError("the melanoma head is implemented for the ResNet50 product model only")
+    return ResNetBinary(mel_head) if backbone == "resnet50" else DinoBinary(local_files_only)
+
+
+def melanoma_prob(model, feats):
+    return torch.sigmoid(model.mel_head(feats.float()).squeeze(1)) if getattr(model, "mel_head", None) is not None else None
 
 
 class Teacher(nn.Module):
@@ -144,18 +156,56 @@ class Teacher(nn.Module):
         return self.m(pixel_values=x).last_hidden_state[:, 0].float()
 
 
+class EnsembleTeacher(nn.Module):
+    """Frozen ensemble of trained ResNet50 runs (stage C, decision 2026-10-22: distil the ensemble into one ResNet50).
+    Returns the mean of the members' temperature-softened probabilities on the student's own (augmented) batch.
+    Members must share the student's normalization and input size (checked)."""
+    def __init__(self, runs, input_size):
+        super().__init__()
+        sys.path.insert(0, str(ROOT / "eval"))
+        from selection_score import load_net
+        self.members, self.kinds = nn.ModuleList(), []
+        for run in runs:
+            run = Path(run) if Path(run).is_absolute() else ROOT / "uncertaintyNet-main/output" / run
+            cfg = json.loads((run / "config.json").read_text())
+            size = cfg.get("input_size") or cfg["Network"]["Basic Setup"]["input_size"]
+            if size != input_size or cfg.get("normalization", "medir") != "medir":
+                raise ValueError(f"teacher {run} does not match the student's input ({size} px, {cfg.get('normalization')})")
+            net, _, kind = load_net(run)
+            self.members.append(net.eval().requires_grad_(False))
+            self.kinds.append(kind)
+
+    @torch.no_grad()
+    def forward(self, x, T):
+        probs = []
+        for net, kind in zip(self.members, self.kinds):
+            logits = net(x)[0] if kind == "sprint" else net(x)
+            probs.append(F.softmax(logits.float() / T, dim=1))
+        return torch.stack(probs).mean(0)
+
+
+def kd_loss(student_logits, teacher_probs, T):
+    """Hinton et al. 2015: T^2 * KL(teacher || student) on temperature-softened distributions."""
+    log_s = F.log_softmax(student_logits.float() / T, dim=1)
+    return F.kl_div(log_s, teacher_probs, reduction="batchmean") * T * T
+
+
 # ------------------------------------------------------------------------------------------------ train / eval
 @torch.no_grad()
 def predict(model, loader, device, amp):
     model.eval()
-    probs, feats, ids, labels = [], [], [], []
+    probs, feats, ids, labels, mels = [], [], [], [], []
     for x, y, i in loader:
         with torch.autocast(device.type, enabled=amp):
             logits, f = model(x.to(device, non_blocking=True))
+        pm = melanoma_prob(model, f)
+        if pm is not None:
+            mels.append(pm.float().cpu().numpy())
         probs.append(F.softmax(logits.float(), 1)[:, 1].cpu().numpy())
         feats.append(f.float().cpu().numpy().astype(np.float16))
         ids += list(i)
         labels.append(y.numpy())
+    predict.last_mel = np.concatenate(mels) if mels else None   # p(melanoma) of the last call, if the model has the head
     return np.concatenate(probs), np.concatenate(feats), ids, np.concatenate(labels)
 
 
@@ -180,8 +230,11 @@ def main(opts):
     eval_dl = {s: DataLoader(dataset.ISICDatasetV2(parts[s], data_dir, test_tf), batch_size=opts.batch_size, **kw)
                for s in parts}
 
-    model = build_model(opts.backbone, opts.offline).to(device)
-    teacher = proj = None
+    model = build_model(opts.backbone, opts.offline, opts.mel_head > 0).to(device)
+    is_mel = {i: "Melanoma" in str(d) for i, d in zip(parts["train"].isic_id, parts["train"].diagnosis_3)}
+    n_mel = max(sum(is_mel.values()), 1)
+    mel_pos_weight = torch.tensor(((len(is_mel) - n_mel) / n_mel) ** 0.5, device=device)
+    teacher = proj = ens_teacher = None
     params = [{"params": model.parameters(), "lr": opts.lr}]
     if opts.backbone == "dinov2":  # small LR for the pretrained ViT, larger for the new head
         params = [{"params": model.backbone.parameters(), "lr": opts.lr},
@@ -190,6 +243,8 @@ def main(opts):
         teacher = Teacher(stats, opts.offline).to(device)
         proj = nn.Linear(model.feat_dim, teacher.m.config.hidden_size).to(device)
         params.append({"params": proj.parameters(), "lr": opts.lr})
+    if opts.teacher_runs:
+        ens_teacher = EnsembleTeacher(opts.teacher_runs.split(","), opts.input_size).to(device)
     opt = (torch.optim.AdamW(params, weight_decay=opts.weight_decay) if opts.optimizer == "adamw"
            else torch.optim.Adam(params, weight_decay=opts.weight_decay))
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=opts.epochs, eta_min=1e-6)
@@ -203,11 +258,17 @@ def main(opts):
     for epoch in range(1, opts.epochs + 1):
         model.train()
         t0, tot, n = time.time(), 0.0, 0
-        for x, y, _ in train_dl:
+        for x, y, ids in train_dl:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             with torch.autocast(device.type, enabled=amp):
                 logits, f = model(x)
                 loss = F.cross_entropy(logits.float(), y, label_smoothing=opts.label_smoothing)
+                if opts.mel_head > 0:
+                    target = torch.tensor([float(is_mel[i]) for i in ids], device=device)
+                    loss = loss + opts.mel_head * F.binary_cross_entropy_with_logits(
+                        model.mel_head(f.float()).squeeze(1), target, pos_weight=mel_pos_weight)
+                if ens_teacher is not None:
+                    loss = (1 - opts.kd_alpha) * loss + opts.kd_alpha * kd_loss(logits, ens_teacher(x, opts.kd_T), opts.kd_T)
                 if teacher is not None:
                     loss = loss + opts.distill * (1 - F.cosine_similarity(proj(f.float()), teacher(x), dim=1)).mean()
             opt.zero_grad(set_to_none=True)
@@ -228,24 +289,26 @@ def main(opts):
             torch.save({"epoch": epoch, "network_state_dict": evaluated.state_dict()}, out / "checkpoint_best_val.pth.tar")
     pd.DataFrame(log).to_csv(out / "log.csv", index=False)
 
-    final = build_model(opts.backbone, opts.offline).to(device)
+    final = build_model(opts.backbone, opts.offline, opts.mel_head > 0).to(device)
     state = torch.load(out / "checkpoint_best_val.pth.tar", map_location=device, weights_only=False)
     final.load_state_dict(state["network_state_dict"])
     frames, embs, emb_ids = [], [], []
     for s in ["train", "val", "test"]:
         p, f, ids, y = predict(final, eval_dl[s], device, amp)
+        p_mel = predict.last_mel
         pc = p.clip(1e-7, 1 - 1e-7)
         ent = -(pc * np.log(pc) + (1 - pc) * np.log(1 - pc))
         frames.append(pd.DataFrame({"isic_id": ids, "label": y.astype(int), "pred": (p >= 0.5).astype(int),
                                     "p_malignant": p, "logit_0": np.log(1 - pc), "logit_1": np.log(pc),
                                     "max_softmax": np.maximum(p, 1 - p), "entropy_of_expected": ent,
                                     "expected_entropy": ent, "mutual_information": 0.0, "mc_std_p_malignant": 0.0,
-                                    "split": s, "diagnosis_3": parts[s].diagnosis_3.to_numpy()}))
+                                    "split": s, "diagnosis_3": parts[s].diagnosis_3.to_numpy(),
+                                    **({"p_melanoma": p_mel} if p_mel is not None else {})}))
         embs.append(f)
         emb_ids += ids
     pd.concat(frames).to_csv(out / "predictions.csv", index=False)
     np.savez_compressed(out / "embeddings.npz", isic_id=np.array(emb_ids), emb=np.concatenate(embs))
-    cfg = {"trainer": "train_sprint", "backbone": opts.backbone, "input_size": opts.input_size,
+    cfg = {"trainer": "train_sprint", "backbone": opts.backbone, "input_size": opts.input_size, "mel_head": opts.mel_head > 0,
            "normalization": "medir" if opts.backbone == "resnet50" else "imagenet", "malignant_index": 1,
            "best_epoch": state["epoch"], "best_val_auroc": best, **vars(opts)}
     (out / "config.json").write_text(json.dumps(cfg, indent=1))
@@ -257,7 +320,7 @@ def main(opts):
 def load_for_inference(run, device="cpu"):
     """(model returning (logits, features), test transform) for a train_sprint run folder."""
     cfg = json.loads((Path(run) / "config.json").read_text())
-    model = build_model(cfg["backbone"], local_files_only=True)
+    model = build_model(cfg["backbone"], local_files_only=True, mel_head=cfg.get("mel_head", False))
     state = torch.load(Path(run) / "checkpoint_best_val.pth.tar", map_location=device, weights_only=False)
     model.load_state_dict(state["network_state_dict"])
     stats = MEDIR_STATS if cfg["normalization"] == "medir" else IMAGENET_STATS
@@ -277,7 +340,11 @@ if __name__ == "__main__":
     ap.add_argument("--label_smoothing", type=float, default=0.0)
     ap.add_argument("--ema", type=float, default=0.0, help="EMA decay of the weights (0 = off)")
     ap.add_argument("--distill", type=float, default=0.0, help="weight of the DINOv2 feature-distillation loss")
+    ap.add_argument("--teacher_runs", default="", help="ensemble distillation: comma-separated run folders (ResNet50)")
+    ap.add_argument("--kd_alpha", type=float, default=0.7, help="weight of the ensemble KD loss vs the label loss")
+    ap.add_argument("--kd_T", type=float, default=2.0, help="distillation temperature")
     ap.add_argument("--photo_aug", action="store_true")
+    ap.add_argument("--mel_head", type=float, default=0.0, help="weight of the melanoma-head BCE loss (0 = no head)")
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--batch_size", type=int, default=128)
     ap.add_argument("--workers", type=int, default=8)
