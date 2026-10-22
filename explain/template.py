@@ -60,6 +60,19 @@ INDEPENDENT_DOUBT_CUT = 0.34  # same rule as llm_input.INDEPENDENT_DOUBT_CUT (te
 INDEPENDENT_NOTE = ("An independent model based on the measured lesion features gives this prediction less support, so it should be reviewed with caution.")
 
 
+OUTLINE_GROUPS = ("A_shape", "B_", "S_")
+
+
+def encoding_label(evidence: dict) -> str:
+    """Code-added label for a reason whose feature the explained ResNet does not represent (probe R² < 0.3): the
+    reason stays (TreeSHAP ranked it) but the reader learns it is the interpretable model's view, not the image model's."""
+    if evidence.get("model_encoded", True):
+        return ""
+    if evidence["feature_id"].startswith(OUTLINE_GROUPS):
+        return " (an outline measure the image model does not appear to use)"
+    return " (a measure the image model does not appear to use)"
+
+
 def ordinal(n: int) -> str:
     suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
     return f"{n}{suffix}"
@@ -123,6 +136,17 @@ def render(payload, entropy_threshold):
     return Explanation(summary, reasons, " ".join(notes), limitations, hedges)
 
 
+SCOPE_NOTE = ("This image differs from the images the model was trained on, so the prediction and the reasons below "
+              "are less reliable and it should be reviewed by a clinician.")
+SHARE_SENTENCE = {
+    "most": "The named features below account for most of this decision.",
+    "about half": "The named features below account for about half of this decision; the rest comes from image "
+                  "patterns without a clinical name.",
+    "little": "The named features below account for little of this decision; most of it comes from image patterns "
+              "without a clinical name.",
+}
+
+
 def render_llm_input(inp):
     """Template baseline on the number-free LLM input (llm_input.build): same facts the LLM gets, fixed wording.
     This is the no-LLM arm compared with every prompt strategy (T6.6)."""
@@ -131,7 +155,11 @@ def render_llm_input(inp):
     summary = f"The model predicts {pred} with {inp['confidence']} confidence."
     if against:
         summary += " The evidence is mixed."
+    if inp.get("named_concept_share"):
+        summary += " " + SHARE_SENTENCE[inp["named_concept_share"]]
     notes = []
+    if inp.get("in_scope") is False:
+        notes.append(SCOPE_NOTE)
     if inp["uncertain"]:
         notes.append("The model is uncertain about this case and it should be reviewed by a clinician.")
     if not inp["surrogate_agrees"]:
@@ -146,6 +174,6 @@ def render_llm_input(inp):
         verb = "supports" if e["direction"] == "supports" else "argues against"
         reasons.append({"feature_id": e["feature_id"], "direction": e["direction"],
                         "text": f"{e['measure'].capitalize()} is {e['finding']} ({e['relative_to_benign']}); "
-                                f"this {e['strength']}ly {verb} the {pred} prediction."})
+                                f"this {e['strength']}ly {verb} the {pred} prediction{encoding_label(e)}."})
     return {"summary": summary, "reasons": reasons, "uncertainty_note": " ".join(notes),
             "limitations": " ".join(inp["limitations"])}

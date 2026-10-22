@@ -15,7 +15,7 @@ Shape moments (S_hu*) are marked clinically_mapped=False: they may be cited only
 import hashlib
 import json
 
-from template import PHRASES
+from template import PHRASES, encoding_label  # noqa: F401 (re-exported)
 
 LLM_INPUT_VERSION = "llm_input_v2"  # v2: independent_check_weak
 PHRASE_BANK_VERSION = "phrase_bank_v1_neutral"  # v1: neutral wording for unvalidated terms
@@ -139,7 +139,13 @@ def build(payload: dict, mask_quality: str, entropy_threshold: float) -> dict:
             "direction": r["direction"],
             "strength": r["strength"],
             "clinically_mapped": mapped,
+            **({"model_encoded": r["model_encoded"]} if "model_encoded" in r else {}),
         })
+    extra = {}  # optional explanation features (interpret/explanation_features.py); absent keys keep old input hashes
+    if payload.get("in_scope") is not None:
+        extra["in_scope"] = bool(payload["in_scope"])
+    if payload.get("named_concept_share"):
+        extra["named_concept_share"] = payload["named_concept_share"]
     return {
         "schema_version": LLM_INPUT_VERSION,
         "phrase_bank": PHRASE_BANK_VERSION,
@@ -153,6 +159,7 @@ def build(payload: dict, mask_quality: str, entropy_threshold: float) -> dict:
         "segmentation_reliable": mask_quality == "ok",
         "evidence": evidence,
         "limitations": LIMITATIONS,
+        **extra,
     }
 
 

@@ -150,6 +150,10 @@ def assemble(spec, inp, raw):
     parsed, ok = verifier.parse(raw)
     reasons = parsed.get("reasons") if ok and isinstance(parsed, dict) else None
     final["reasons"] = reasons if isinstance(reasons, list) else []
+    labels = {e["feature_id"]: li.encoding_label(e) for e in inp["evidence"]}
+    for r in final["reasons"]:  # encoding labels are code-added, so they hold whatever the LLM wrote
+        if isinstance(r, dict) and labels.get(r.get("feature_id")):
+            r["text"] = r.get("text", "").rstrip(" .") + labels[r["feature_id"]] + "."
     return final
 
 

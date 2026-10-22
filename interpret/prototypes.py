@@ -198,6 +198,7 @@ def concepts(opts):
            "probe_r2_top": dict(sorted(probes.items(), key=lambda kv: -kv[1])[:12]),
            "probe_r2_bottom": dict(sorted(probes.items(), key=lambda kv: kv[1])[:8]),
            "probe_r2_monet": {c: probes[c] for c in mcols},
+           "probe_r2_all": probes,
            "concept_bottleneck": share}
     save(opts, "concepts", res)
 

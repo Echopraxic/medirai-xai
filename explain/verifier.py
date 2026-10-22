@@ -54,6 +54,8 @@ REVIEW_WORDS = ["review", "clinician", "dermatologist", "expert"]
 SURROGATE_WORDS = ["may not reflect", "does not reproduce", "not reproduce", "approximat", "may not explain",
                    "disagree"]
 SEGMENT_WORDS = ["outline", "segmentation", "border detection", "boundary"]
+SCOPE_WORDS = ["differs from the images", "unlike the images", "unlike the training", "outside the range",
+               "less reliable"]
 INDEPENDENT_WORDS = ["independent model", "less support", "second opinion", "reviewed with caution"]
 AGAINST_WORDS = ["argues against", "argue against", "against the", "does not support", "counts against",
                  "speaks against", "weighs against"]
@@ -120,6 +122,8 @@ def verify(llm_input, raw, allowed_numbers=None):
         checks.append(bool(_has(full, SEGMENT_WORDS)))
     if llm_input.get("independent_check_weak"):
         checks.append(bool(_has(full, INDEPENDENT_WORDS)))
+    if llm_input.get("in_scope") is False:   # scope flag (C5 extended to distribution shift)
+        checks.append(bool(_has(full, SCOPE_WORDS)))
     res["uncertainty_ok"] = all(checks)
     res["uncertainty_flag_ok"] = bool(_has(note, UNCERTAIN_WORDS)) if llm_input["uncertain"] else True
 

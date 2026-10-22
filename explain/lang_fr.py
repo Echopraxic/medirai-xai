@@ -68,6 +68,15 @@ NOTES = {
     "independent": ("Un modèle indépendant, fondé sur les caractéristiques mesurées de la lésion, appuie moins cette "
                     "prédiction; elle devrait être examinée avec prudence."),
     "outline": "Le contour automatique de la lésion pourrait être inexact.",
+    "scope": ("Cette image diffère des images sur lesquelles le modèle a été entraîné; la prédiction et les raisons "
+              "ci-dessous sont donc moins fiables, et le cas devrait être examiné par un clinicien ou une clinicienne."),
+}
+SHARE_SENTENCE_FR = {  # same keys as template.SHARE_SENTENCE
+    "most": "Les caractéristiques nommées ci-dessous expliquent l'essentiel de cette décision.",
+    "about half": ("Les caractéristiques nommées ci-dessous expliquent environ la moitié de cette décision; le reste "
+                   "provient de motifs de l'image sans nom clinique."),
+    "little": ("Les caractéristiques nommées ci-dessous expliquent peu de cette décision; l'essentiel provient de motifs "
+               "de l'image sans nom clinique."),
 }
 LIMITATIONS_FR = [
     "Les caractéristiques sont mesurées à partir d'un contour automatique de la lésion, sur une seule photographie clinique.",
@@ -109,6 +118,15 @@ def relative_fr(evidence, word_fr):
     return f"{much}plus {word_fr} que la plupart des lésions bénignes"
 
 
+def encoding_label_fr(evidence):
+    """French twin of template.encoding_label."""
+    if evidence.get("model_encoded", True):
+        return ""
+    if evidence["feature_id"].startswith(("A_shape", "B_", "S_")):
+        return " (mesure du contour que le modèle d'image ne semble pas utiliser)"
+    return " (mesure que le modèle d'image ne semble pas utiliser)"
+
+
 def reason_fr(evidence, prediction):
     mapped = evidence.get("clinically_mapped", True)
     measure = PHRASES_FR[evidence["feature_id"]][0] if mapped else UNMAPPED_SHAPE
@@ -116,7 +134,8 @@ def reason_fr(evidence, prediction):
     adv, pred = STRENGTH[evidence["strength"]], q(PREDICTION[prediction])
     verb = (f"appuie {adv} la prédiction {pred}" if evidence["direction"] == "supports"
             else f"va {adv} à l'encontre de la prédiction {pred}")
-    return f"{measure[0].upper()}{measure[1:]}{NBSP}: {word} ({relative_fr(evidence, word)}); ce constat {verb}."
+    return (f"{measure[0].upper()}{measure[1:]}{NBSP}: {word} ({relative_fr(evidence, word)}); ce constat {verb}"
+            f"{encoding_label_fr(evidence)}.")
 
 
 def render_llm_input_fr(inp):
@@ -125,7 +144,11 @@ def render_llm_input_fr(inp):
     summary = f"Le modèle prédit une lésion {PREDICTION[pred]}, avec une confiance {CONFIDENCE[inp['confidence']]}."
     if any(e["direction"] == "argues_against" for e in inp["evidence"]):
         summary += " " + NOTES["mixed"]
+    if inp.get("named_concept_share"):
+        summary += " " + SHARE_SENTENCE_FR[inp["named_concept_share"]]
     notes = []
+    if inp.get("in_scope") is False:
+        notes.append(NOTES["scope"])
     if inp["uncertain"]:
         notes.append(NOTES["uncertain"])
     if not inp["surrogate_agrees"]:
