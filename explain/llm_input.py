@@ -146,6 +146,8 @@ def build(payload: dict, mask_quality: str, entropy_threshold: float) -> dict:
         extra["in_scope"] = bool(payload["in_scope"])
     if payload.get("named_concept_share"):
         extra["named_concept_share"] = payload["named_concept_share"]
+    if payload.get("tone_unvalidated"):
+        extra["tone_unvalidated"] = True
     return {
         "schema_version": LLM_INPUT_VERSION,
         "phrase_bank": PHRASE_BANK_VERSION,

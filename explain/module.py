@@ -146,6 +146,7 @@ class Explainer:
         if self.extras and case:
             if case.get("dinov2_emb") is not None:
                 payload["in_scope"], extra_prov["scope_distance"] = self.extras.in_scope(case["dinov2_emb"])
+                payload["tone_unvalidated"], extra_prov["darker_skin_probability"] = self.extras.tone_scope(case["dinov2_emb"])
             if case.get("concepts") is not None:
                 extra_prov["concept_share"], band = self.extras.concept_share(case["concepts"], prediction["p_malignant"])
                 extra_prov["concept_share_band"] = band

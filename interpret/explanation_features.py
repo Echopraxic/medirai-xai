@@ -135,6 +135,14 @@ class ExplanationFeatures:
         contrib, _ = self._linear("direction", values)
         return dict(zip(self.models["direction"]["columns"], contrib))
 
+    def tone_scope(self, dinov2_emb):
+        """Darker-skin scope rule (interpret/skin_tone.py): (flag, probability). The model is near chance on Fitzpatrick V-VI."""
+        if not hasattr(self, "_tone"):
+            sys.path.insert(0, str(ROOT / "interpret"))
+            from skin_tone import ToneScope
+            self._tone = ToneScope()
+        return self._tone(dinov2_emb)
+
     def in_scope(self, dinov2_emb):
         s = self.scope
         z = (np.asarray(dinov2_emb, dtype=np.float64) - s["pca_mean"]) @ s["pca_components"].T - s["location"]

@@ -138,6 +138,9 @@ def render(payload, entropy_threshold):
 
 SCOPE_NOTE = ("This image differs from the images the model was trained on, so the prediction and the reasons below "
               "are less reliable and it should be reviewed by a clinician.")
+TONE_NOTE = ("The skin in this image appears darker than the skin the model was mainly validated on, and its accuracy "
+             "is lower for darker skin, so the prediction and the reasons below are less reliable and it should be "
+             "reviewed by a clinician.")
 SHARE_SENTENCE = {
     "most": "The named features below account for most of this decision.",
     "about half": "The named features below account for about half of this decision; the rest comes from image "
@@ -158,6 +161,8 @@ def render_llm_input(inp):
     if inp.get("named_concept_share"):
         summary += " " + SHARE_SENTENCE[inp["named_concept_share"]]
     notes = []
+    if inp.get("tone_unvalidated"):
+        notes.append(TONE_NOTE)
     if inp.get("in_scope") is False:
         notes.append(SCOPE_NOTE)
     if inp["uncertain"]:

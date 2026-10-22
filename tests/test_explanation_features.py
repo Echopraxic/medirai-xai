@@ -83,3 +83,17 @@ def test_case_reasons_label_does_not_change_the_choice():
     assert "model_encoded" not in plain[0] and lab[0]["model_encoded"] is False and lab[1]["model_encoded"] is True
     filt = case_reasons(groups, signed, values, feats, ref, (0.2, 0.6), not_cited={"B_radial_cv"})
     assert [r["feature_id"] for r in filt] == ["C_darkness_vs_skin", "T_roughness", "A_shape_asym_max"]
+
+
+def test_darker_skin_flag_needs_a_warning_and_review_in_en_and_fr():
+    inp = li.build(payload_with(tone_unvalidated=True), "ok", 0.5)
+    assert inp["tone_unvalidated"] is True
+    good = render_llm_input(inp)
+    assert "darker than the skin the model was mainly validated on" in good["uncertainty_note"]
+    assert verify(inp, good)["pass_all"]
+    bad = copy.deepcopy(good)
+    bad["uncertainty_note"] = "The model is uncertain and should be reviewed by a clinician."
+    inp_uncertain = li.build(payload_with(tone_unvalidated=True, uncertainty={"entropy_of_expected": 0.9}), "ok", 0.5)
+    assert not verify(inp_uncertain, bad)["uncertainty_ok"]          # uncertainty wording alone does not cover the tone flag
+    assert "peaux plus foncées" in render_llm_input_fr(inp)["uncertainty_note"]
+    assert "tone_unvalidated" not in li.build(payload_with(), "ok", 0.5)   # absent unless flagged: input hashes unchanged

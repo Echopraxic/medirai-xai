@@ -68,6 +68,9 @@ NOTES = {
     "independent": ("Un modèle indépendant, fondé sur les caractéristiques mesurées de la lésion, appuie moins cette "
                     "prédiction; elle devrait être examinée avec prudence."),
     "outline": "Le contour automatique de la lésion pourrait être inexact.",
+    "tone": ("La peau sur cette image semble plus foncée que celle sur laquelle le modèle a surtout été validé, et sa "
+             "précision est moindre pour les peaux plus foncées; la prédiction et les raisons ci-dessous sont donc "
+             "moins fiables, et le cas devrait être examiné par un clinicien ou une clinicienne."),
     "scope": ("Cette image diffère des images sur lesquelles le modèle a été entraîné; la prédiction et les raisons "
               "ci-dessous sont donc moins fiables, et le cas devrait être examiné par un clinicien ou une clinicienne."),
 }
@@ -147,6 +150,8 @@ def render_llm_input_fr(inp):
     if inp.get("named_concept_share"):
         summary += " " + SHARE_SENTENCE_FR[inp["named_concept_share"]]
     notes = []
+    if inp.get("tone_unvalidated"):
+        notes.append(NOTES["tone"])
     if inp.get("in_scope") is False:
         notes.append(NOTES["scope"])
     if inp["uncertain"]:

@@ -56,6 +56,7 @@ SURROGATE_WORDS = ["may not reflect", "does not reproduce", "not reproduce", "ap
 SEGMENT_WORDS = ["outline", "segmentation", "border detection", "boundary"]
 SCOPE_WORDS = ["differs from the images", "unlike the images", "unlike the training", "outside the range",
                "less reliable"]
+TONE_WORDS = ["darker skin", "skin tone"]
 INDEPENDENT_WORDS = ["independent model", "less support", "second opinion", "reviewed with caution"]
 AGAINST_WORDS = ["argues against", "argue against", "against the", "does not support", "counts against",
                  "speaks against", "weighs against"]
@@ -124,6 +125,8 @@ def verify(llm_input, raw, allowed_numbers=None):
         checks.append(bool(_has(full, INDEPENDENT_WORDS)))
     if llm_input.get("in_scope") is False:   # scope flag (C5 extended to distribution shift)
         checks.append(bool(_has(full, SCOPE_WORDS)))
+    if llm_input.get("tone_unvalidated"):    # darker-skin scope rule: the warning is required
+        checks.append(bool(_has(full, TONE_WORDS)) and bool(_has(full, REVIEW_WORDS)))
     res["uncertainty_ok"] = all(checks)
     res["uncertainty_flag_ok"] = bool(_has(note, UNCERTAIN_WORDS)) if llm_input["uncertain"] else True
 
