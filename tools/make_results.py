@@ -478,6 +478,19 @@ def interpretability_section():
         probes = ", ".join(f"{k} {v:.2f}" for k, v in list(r["probe_r2_top"].items())[:8])
         low = ", ".join(f"{k} {v:.2f}" for k, v in list(r["probe_r2_bottom"].items())[:5])
         out.append(f"**I3 concept probes** (R² on internal val): best encoded {probes}; least {low}.")
+    for rel in [r for r in rels if r.endswith("/feature_review.json")]:
+        r = load(rel)
+        sc, pn = r["scope_flag"]["midas_dev_val"], r["similar_case_panel"]["internal_val"]["ungated"]
+        rows = [{"configuration": k, "confident-wrong with no caution": fmt(v["false_reassurance_confident_wrong"], pct=True),
+                 "cases with a labelled reason": fmt(v["cases_with_a_labelled_reason"], pct=True),
+                 "verifier pass": fmt(v["verifier_pass_rate"], pct=True), "mean words": f"{v['mean_words']:.0f}"}
+                for k, v in r["all_together"].items()]
+        out.append("**Explanation-feature review** (internal val; decided configuration = labelled unencoded features, "
+                   "scope flag, share sentence only when 'little', no panel)" + chr(10) + chr(10) + table(rows, list(rows[0])))
+        out.append(f"Scope flag on MIDAS dev_val: wrong predictions with a caution {sc['wrong_with_caution']['without_scope']:.0%} "
+                   f"-> {sc['wrong_with_caution']['with_scope']:.0%}; correct ones {sc['correct_with_caution']['without_scope']:.0%} "
+                   f"-> {sc['correct_with_caution']['with_scope']:.0%}. Similar-case panel in ResNet space reinforces "
+                   f"{pn['wrong_reinforced']:.0%} of wrong predictions (internal val), so it is not shown in the product.")
     out.append(src(*rels))
     return "\n\n".join(out)
 
