@@ -11,6 +11,9 @@
 #   ARM=v4      split v4 = v2 + MIDAS phone photos
 #   ARM=v4bal   split v4 + diagnosis-balanced sampling (count^-0.5)
 #   ARM=v4mc    split v4, 7-class diagnosis head (classifier/train_multiclass.py)
+#   batch 2 (classifier/train_sprint.py; hygiene = AdamW + label smoothing 0.1 + EMA 0.999):
+#   ARM=hyg | hyg384 (+384 px) | distill (+DINOv2 feature distillation) | distill_v4 (+ split v4) | photo (+ phone /
+#       darker-skin photometric augmentation) | dinov2 (DINOv2-L fine-tune; comparison only, never the product model)
 #   ARM=score RUN=<run folder under uncertaintyNet-main/output>   selection score of an existing run only
 #
 #   for a in v4 v4bal v4mc; do for s in 0 1 2; do
@@ -27,6 +30,7 @@ SEED=${SEED:-0}
 LR=${LR:-3e-4}
 EPOCHS=${EPOCHS:-30}
 export TORCH_HOME=${TORCH_HOME:-$HOME/.cache/torch}
+export HF_HOME=${HF_HOME:-$SCRATCH/hf} HF_HUB_OFFLINE=1        # DINOv2-L pre-downloaded on a login node
 module load python/3.12 cuda
 source "$REPO/.venv/bin/activate"
 
@@ -62,6 +66,19 @@ case "$ARM" in
     cd "$REPO"
     python classifier/train_multiclass.py --dataset-path "$DATA" --out "uncertaintyNet-main/output/$TAG/run" \
       --seed "$SEED" --lr "$LR" --epochs "$EPOCHS" --workers 8 --split_file isic_v4_clinical_plus_midas.csv
+    score "$TAG/run" ;;
+  hyg|hyg384|distill|distill_v4|photo|dinov2)
+    HYG=(--optimizer adamw --label_smoothing 0.1 --ema 0.999 --offline --workers 8 --seed "$SEED")
+    case "$ARM" in
+      hyg)        A=() ;;
+      hyg384)     A=(--input_size 384) ;;
+      distill)    A=(--distill 1.0) ;;
+      distill_v4) A=(--distill 1.0 --split_file isic_v4_clinical_plus_midas.csv) ;;
+      photo)      A=(--photo_aug) ;;
+      dinov2)     A=(--backbone dinov2 --lr 2e-5 --batch_size 32 --epochs 15) ;;
+    esac
+    cd "$REPO"
+    python classifier/train_sprint.py --dataset-path "$DATA" --out "uncertaintyNet-main/output/$TAG/run"       --lr "$LR" --epochs "$EPOCHS" "${HYG[@]}" "${A[@]}"
     score "$TAG/run" ;;
   *) echo "unknown ARM $ARM"; exit 2 ;;
 esac

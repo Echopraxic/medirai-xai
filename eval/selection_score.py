@@ -6,8 +6,9 @@ split v2 val (internal) and MIDAS dev_val phone photos. Run at the end of every 
   at the internal-val threshold t giving malignant sensitivity >= 0.90 (TTA): internal val sensitivity, specificity
   and melanoma recall (the prereg's no-worse-than-0.02 checks), plus MIDAS dev_val sensitivity and specificity
 
-Binary uncertaintyNet runs (config.json + checkpoint_best_val.pth.tar) and 7-class runs from
-classifier/train_multiclass.py (p(malignant) = summed malignant-class probability) are both accepted.
+Binary uncertaintyNet runs (config.json + checkpoint_best_val.pth.tar), 7-class runs from
+classifier/train_multiclass.py (p(malignant) = summed malignant-class probability) and classifier/train_sprint.py
+runs (ResNet50 or DINOv2) are accepted.
 
     python eval/selection_score.py --run uncertaintyNet-main/output/<tag>/resnet50_det/run \
         --isic_dir uncertaintyNet-main/datasets_768/ISIC_clinical --midas_dir data/midas/files_768
@@ -37,29 +38,37 @@ MALIGNANT_CLASSES = 4  # train_multiclass.CLASSES: the first four are malignant
 
 
 def load_net(run):
+    """(net, test transform, kind): kind 'multiclass' (7-class head), 'sprint' (classifier/train_sprint.py: returns
+    (logits, features), may use ImageNet normalization) or 'binary' (uncertaintyNet run)."""
     run = Path(run)
     cfg = json.loads((run / "config.json").read_text())
+    if cfg.get("trainer") == "train_sprint":
+        sys.path.insert(0, str(ROOT / "classifier"))
+        from train_sprint import load_for_inference
+        net, tf = load_for_inference(run)
+        return net, tf, "sprint"
     state = torch.load(run / "checkpoint_best_val.pth.tar", map_location="cpu", weights_only=False)
     if "classes" in cfg:  # 7-class head
         from models.model import get_model
         base = json.loads((UNC / "configs/medir_v2.json").read_text())["Network"]["Basic Setup"]
         net = get_model(dict(base, output_size=len(cfg["classes"]), network_type="deterministic"))
         net.load_state_dict(state["network_state_dict"])
-        return net, base["input_size"], True
+        return net, dataset.medirv2_transforms(base["input_size"])[1], "multiclass"
     from export_predictions import build_network
     config = utils.read_config(run)
     net = build_network(config, run)
     net.load_state_dict(state["network_state_dict"], strict=True)
-    return net, config["Network"]["Basic Setup"]["input_size"], False
+    return net, dataset.medirv2_transforms(config["Network"]["Basic Setup"]["input_size"])[1], "binary"
 
 
 @torch.no_grad()
-def p_malignant(net, multiclass, tf, paths, device, tta, batch_size=32):
+def p_malignant(net, kind, tf, paths, device, tta, batch_size=32):
     out = []
+    logits_of = (lambda x: net(x)[0]) if kind == "sprint" else net
     for i in range(0, len(paths), batch_size):
         x = torch.stack([tf(Image.open(p).convert("RGB")) for p in paths[i:i + batch_size]]).to(device)
-        probs = torch.stack([F.softmax(net(v(x)).float(), -1) for v in (DIHEDRAL if tta else DIHEDRAL[:1])]).mean(0)
-        out.append((probs[:, :MALIGNANT_CLASSES].sum(1) if multiclass else probs[:, 1]).cpu().numpy())
+        probs = torch.stack([F.softmax(logits_of(v(x)).float(), -1) for v in (DIHEDRAL if tta else DIHEDRAL[:1])]).mean(0)
+        out.append((probs[:, :MALIGNANT_CLASSES].sum(1) if kind == "multiclass" else probs[:, 1]).cpu().numpy())
     return np.concatenate(out)
 
 
@@ -90,15 +99,14 @@ def selection_sets(isic_dir, midas_dir):
 
 def main(opts):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net, size, multiclass = load_net(opts.run)
+    net, tf, kind = load_net(opts.run)
     net.to(device).eval()
-    _, tf = dataset.medirv2_transforms(size)
     sets = selection_sets(opts.isic_dir, opts.midas_dir)
-    res = {"run": str(opts.run), "multiclass": multiclass}
+    res = {"run": str(opts.run), "model_kind": kind}
     probs = {}
     for name, (y, paths, mel) in sets.items():
         for tta in (False, True):
-            p = p_malignant(net, multiclass, tf, paths, device, tta)
+            p = p_malignant(net, kind, tf, paths, device, tta)
             res[f"{name}_auroc{'_tta' if tta else ''}"] = float(roc_auc_score(y, p))
             if tta:
                 probs[name] = (y, p, mel)
