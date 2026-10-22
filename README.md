@@ -23,7 +23,8 @@ explain/       number-free LLM input, prompts, template baseline, LLM generation
 concepts/      concept validation against ENHANCE, MILK10k MONET and Derm7pt (incl. a VLM concept checker)
 eval/          prediction export, baseline + uncertainty/deferral tables, Grad-CAM arm, wrong-prediction study
 tools/         image cache, ISIC and Redivis downloaders, results collector
-classifier/    extra classifier heads: 7-class diagnosis head, foundation-model linear probes
+classifier/    extra classifier heads: 7-class diagnosis head, foundation-model embeddings and linear probes
+interpret/     model-level interpretability prototypes: out-of-scope detector, similar-case retrieval, concept probes
 slurm/         Rorqual / Narval (Calcul Québec) job scripts; see slurm/README.md
 tests/         CPU regression tests (python -m pytest tests -q)
 poc-nrc-main/  legacy NRC CNN/foundation-model ensemble (P0-fixed; models must be retrained before reuse)

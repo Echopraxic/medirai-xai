@@ -450,6 +450,38 @@ def judge_section():
     return "\n\n".join(out)
 
 
+def interpretability_section():
+    """Interpretability prototypes (interpret/prototypes.py) on selection data."""
+    out = ["## Interpretability prototypes (I2/I3/I5/I7; selection data only)"]
+    rels = sorted(p.relative_to(ROOT).as_posix() for p in ROOT.glob("eval/output/interpretability/*/*.json"))
+    rows = []
+    for rel in [r for r in rels if "/ood_" in r]:
+        r = load(rel)
+        m = r["midas_dev_val"]
+        rows.append({"space": r["space"], "detects MIDAS (AUROC)": fmt(r["shift_detection_auroc_midas_vs_internal_val"]),
+                     "MIDAS out of scope": fmt(m["share_out_of_scope"], pct=True),
+                     "flags MIDAS errors (AUROC)": fmt(m["error_auroc_mahalanobis"])})
+    if rows:
+        out.append("**I7 out-of-scope detector** (Mahalanobis, cut = internal val p95)\n\n" + table(rows, list(rows[0])))
+    for rel in [r for r in rels if r.endswith("/retrieval.json")]:
+        r = load(rel)
+        rows = [{"set": k, "neighbours with the same label": fmt(v["precision_at_k_same_label"], pct=True),
+                 "neighbour vote AUROC": fmt(v["neighbour_vote_auroc"]),
+                 "flags errors (AUROC)": fmt(v["error_auroc_neighbour_disagreement"])}
+                for k, v in r.items() if isinstance(v, dict)]
+        out.append(f"**I5 similar-case retrieval** (k = {r['k']})\n\n" + table(rows, list(rows[0])))
+    for rel in [r for r in rels if r.endswith("/concepts.json")]:
+        r = load(rel)
+        rows = [{"concepts": k, "agreement with ResNet call": fmt(v["agreement_with_resnet_call"], pct=True),
+                 "logit R²": fmt(v["logit_r2_internal_val"])} for k, v in r["concept_bottleneck"].items()]
+        out.append("**I2 concept bottleneck share** (linear, internal val)\n\n" + table(rows, list(rows[0])))
+        probes = ", ".join(f"{k} {v:.2f}" for k, v in list(r["probe_r2_top"].items())[:8])
+        low = ", ".join(f"{k} {v:.2f}" for k, v in list(r["probe_r2_bottom"].items())[:5])
+        out.append(f"**I3 concept probes** (R² on internal val): best encoded {probes}; least {low}.")
+    out.append(src(*rels))
+    return "\n\n".join(out)
+
+
 def main(opts):
     try:
         commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True,
@@ -464,7 +496,7 @@ def main(opts):
         "the split-v1 ResNet50) are labelled as such; re-run the pipeline step to refresh them.",
         criteria_section(runs), baseline_section(), masks_section(), trees_section(), concepts_section(),
         llm_section(runs), c6_gradcam_section(), new_checks_section(), d5_section(), judge_section(),
-        model_comparison_section(), external_section(), sprint_section(),
+        model_comparison_section(), external_section(), sprint_section(), interpretability_section(),
     ]
     out = Path(opts.out)
     out.write_text("\n\n".join(parts) + "\n", encoding="utf-8", newline="\n")
