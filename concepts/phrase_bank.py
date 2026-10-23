@@ -30,7 +30,7 @@ import extract as fx  # noqa: E402
 from template import PHRASES  # noqa: E402
 
 NOT_PHRASED = {"C_n_colors"}  # mirrors trees/treeshap_top3.NOT_PHRASED (importing it would pull in xgboost/shap)
-VERSION = "phrase_bank_v1"
+VERSION = "phrase_bank_v2"   # v2 (2026-10-23): adds the C2 validation on Derm7pt and SkinCon (concepts/c2_validation.py)
 
 # feature -> (intended clinical concept, ABCD / clinical relevance, [tests]); a test is
 # ("enhance", concept) | ("monet", "MONET_x~feature") | ("derm7pt", label)
@@ -101,7 +101,18 @@ def judge(test, feature, enh, monet, derm):
     return None
 
 
+def c2_results(feature, c2):
+    """Confirmatory Derm7pt / SkinCon rows for a handcrafted feature (prereg 2026-10-23); diagnosis-confounded pairs do not count."""
+    out = []
+    for r in (c2 or {}).get("confirmatory", []):
+        if r.get("candidate") == feature and r.get("kind") == "handcrafted" and not r.get("diagnosis_confounded"):
+            name = {"derm7pt": "Derm7pt expert", "skincon": "SkinCon dermatologist"}[r["dataset"]]
+            out.append((r["status"], f"{name} '{r['concept'].replace('_', ' ')}' (clinical photos): AUROC {r['auroc']:.2f}"))
+    return out
+
+
 def build():
+    c2 = load("concepts/output/c2_validation.json")
     enh = load("concepts/output/enhance_report.json")
     monet = load("concepts/output/monet_report.json")
     vlm = latest_vlm()
@@ -110,7 +121,7 @@ def build():
     for fid, (group, units, meaning) in fx.FEATURE_DICTIONARY.items():
         measure, high, low = PHRASES.get(fid, (fid, "high", "low"))
         concept, relevance, tests = INTENDED.get(fid, (None, fx.CONCEPT_GROUPS.get(group, group), []))
-        results = [r for r in (judge(t, fid, enh, monet, derm) for t in tests) if r]
+        results = [r for r in (judge(t, fid, enh, monet, derm) for t in tests) if r] + c2_results(fid, c2)
         status = max((r[0] for r in results), key=RANK.get) if results else "untested"
         if fid.startswith("S_hu"):
             shown = "only as 'a shape pattern without a clinical name'"
