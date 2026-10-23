@@ -370,6 +370,166 @@ def model_comparison_section():
     return "\n\n".join(out)
 
 
+def external_section():
+    """External tests (eval/external_test.py): locked sets scored once per candidate; MIDAS dev_val = selection data."""
+    out = ["## External tests (locked sets; MIDAS dev_val is selection data)"]
+    rels = []
+    for name in ("isic_overview", "mcr_sl", "ddi", "ddi2", "midas_dev_val"):
+        rel = f"eval/output/external/{name}/external_report.json"
+        r = load(rel)
+        if not r:
+            continue
+        rels.append(rel)
+        rows = []
+        for tag, v in r["runs"].items():
+            e = v["external"]
+            rows.append({"run": tag, "n images": e["n_images"], "AUROC": fmt(e["AUROC"]["value"]),
+                         "95% CI": "[{:.2f}, {:.2f}]".format(*e["AUROC"]["ci95"]),
+                         "malignant recall": fmt(e["malignant recall"]["value"]),
+                         "benign recall": fmt(e["benign recall"]["value"]),
+                         "deferred": fmt(e["deferred share (internal val p75 entropy)"], pct=True),
+                         "entropy AUROC errors": fmt(e["entropy AUROC for errors"])})
+        out.append(f"**{name}** ({r['note']})\n\n" + table(rows, list(rows[0])))
+    looks = ROOT / "eval/output/external/looks.csv"
+    if looks.exists():
+        n = pd.read_csv(looks).source.value_counts().to_dict()
+        out.append("Looks at the locked sets so far (`eval/output/external/looks.csv`): "
+                   + ", ".join(f"{k} {v}" for k, v in sorted(n.items())))
+    out.append(src(*rels))
+    return "\n\n".join(out)
+
+
+def sprint_section():
+    """Classifier sprint (prereg 2026-10-21): stage A and stage-B selection scores (selection data only)."""
+    out = ["## Classifier sprint: selection score S = mean(internal val AUROC, MIDAS dev_val AUROC)"]
+    rels = []
+    for rel, title in (("eval/output/stage_a/preprocess_ablation/summary.md", "Stage A1, test-time preprocessing"),
+                       ("eval/output/stage_a/probes/summary.md", "Stage A3, frozen-embedding probes")):
+        if (ROOT / rel).exists():
+            rels.append(rel)
+            body = (ROOT / rel).read_text(encoding="utf-8").split("\n\n", 1)[1]
+            out.append(f"**{title}**\n\n" + body.strip())
+    scores = sorted(ROOT.glob("uncertaintyNet-main/output/*/**/selection_score.json"))
+    rows = []
+    for p in scores:
+        r = json.loads(p.read_text())
+        at = r["internal_val_at_t"]
+        rows.append({"run": p.relative_to(ROOT / "uncertaintyNet-main/output").parts[0], "S (TTA)": fmt(r["S"]),
+                     "S (no TTA)": fmt(r["S_no_tta"]), "internal val AUROC": fmt(r["internal_val_auroc_tta"]),
+                     "MIDAS dev_val AUROC": fmt(r["midas_dev_val_auroc_tta"]),
+                     "sens / spec / melanoma @ t": f"{at['sensitivity']:.2f} / {at['specificity']:.2f} / "
+                                                   f"{at.get('melanoma_recall', float('nan')):.2f}"})
+    if rows:
+        out.append("**Stage B, per run** (`eval/selection_score.py`; 3 seeds per arm, compare arm means)\n\n"
+                   + table(rows, list(rows[0])))
+        rels += [p.relative_to(ROOT).as_posix() for p in scores]
+    out.append(src(*rels))
+    return "\n\n".join(out)
+
+
+def judge_section():
+    """LLM-as-judge (explain/llm_judge.py): planted-error recall, clean specificity, claim labels per arm."""
+    out = ["## LLM judges (T6.4)"]
+    rels, rows = [], []
+    for rel in sorted(p.relative_to(ROOT).as_posix() for p in ROOT.glob("explain/output/judge_*/*/judge_summary.json")):
+        s = load(rel)
+        if not all(a["parse_ok"] >= 0.9 for a in s["arms"].values()):
+            continue  # void runs (e.g. the 2026-10-18 Gemma run) are kept on disk but not reported
+        rels.append(rel)
+        c = s["controls"]
+        rows.append({"judge": Path(rel).parent.name, "clean specificity": fmt(c["clean"]["specificity"]),
+                     **{f"recall {k.replace('_', ' ')}": fmt(v["recall"]) for k, v in c.items()
+                        if k not in ("base_arms", "clean")},
+                     **{f"supported: {a.split('__')[0]}": fmt(v["claim_labels"].get("supported"))
+                        for a, v in s["arms"].items()}})
+    if rows:
+        out.append(table(rows, list(rows[0])))
+    out.append("Judge direction labels are not used (H3): both judges override benign-typical values that support "
+               "malignant with their own clinical prior.")
+    out.append(src(*rels))
+    return "\n\n".join(out)
+
+
+def interpretability_section():
+    """Interpretability prototypes (interpret/prototypes.py) on selection data."""
+    out = ["## Interpretability prototypes (I2/I3/I5/I7; selection data only)"]
+    rels = sorted(p.relative_to(ROOT).as_posix() for p in ROOT.glob("eval/output/interpretability/*/*.json"))
+    rows = []
+    for rel in [r for r in rels if "/ood_" in r]:
+        r = load(rel)
+        m = r["midas_dev_val"]
+        rows.append({"space": r["space"], "detects MIDAS (AUROC)": fmt(r["shift_detection_auroc_midas_vs_internal_val"]),
+                     "MIDAS out of scope": fmt(m["share_out_of_scope"], pct=True),
+                     "flags MIDAS errors (AUROC)": fmt(m["error_auroc_mahalanobis"])})
+    if rows:
+        out.append("**I7 out-of-scope detector** (Mahalanobis, cut = internal val p95)\n\n" + table(rows, list(rows[0])))
+    for rel in [r for r in rels if r.endswith("/retrieval.json")]:
+        r = load(rel)
+        rows = [{"set": k, "neighbours with the same label": fmt(v["precision_at_k_same_label"], pct=True),
+                 "neighbour vote AUROC": fmt(v["neighbour_vote_auroc"]),
+                 "flags errors (AUROC)": fmt(v["error_auroc_neighbour_disagreement"])}
+                for k, v in r.items() if isinstance(v, dict)]
+        out.append(f"**I5 similar-case retrieval** (k = {r['k']})\n\n" + table(rows, list(rows[0])))
+    for rel in [r for r in rels if r.endswith("/concepts.json")]:
+        r = load(rel)
+        rows = [{"concepts": k, "agreement with ResNet call": fmt(v["agreement_with_resnet_call"], pct=True),
+                 "logit R²": fmt(v["logit_r2_internal_val"])} for k, v in r["concept_bottleneck"].items()]
+        out.append("**I2 concept bottleneck share** (linear, internal val)\n\n" + table(rows, list(rows[0])))
+        probes = ", ".join(f"{k} {v:.2f}" for k, v in list(r["probe_r2_top"].items())[:8])
+        low = ", ".join(f"{k} {v:.2f}" for k, v in list(r["probe_r2_bottom"].items())[:5])
+        out.append(f"**I3 concept probes** (R² on internal val): best encoded {probes}; least {low}.")
+    for rel in [r for r in rels if r.endswith("/feature_review.json")]:
+        r = load(rel)
+        sc, pn = r["scope_flag"]["midas_dev_val"], r["similar_case_panel"]["internal_val"]["ungated"]
+        rows = [{"configuration": k, "confident-wrong with no caution": fmt(v["false_reassurance_confident_wrong"], pct=True),
+                 "cases with a labelled reason": fmt(v["cases_with_a_labelled_reason"], pct=True),
+                 "verifier pass": fmt(v["verifier_pass_rate"], pct=True), "mean words": f"{v['mean_words']:.0f}"}
+                for k, v in r["all_together"].items()]
+        out.append("**Explanation-feature review** (internal val; decided configuration = labelled unencoded features, "
+                   "scope flag, share sentence only when 'little', no panel)" + chr(10) + chr(10) + table(rows, list(rows[0])))
+        out.append(f"Scope flag on MIDAS dev_val: wrong predictions with a caution {sc['wrong_with_caution']['without_scope']:.0%} "
+                   f"-> {sc['wrong_with_caution']['with_scope']:.0%}; correct ones {sc['correct_with_caution']['without_scope']:.0%} "
+                   f"-> {sc['correct_with_caution']['with_scope']:.0%}. Similar-case panel in ResNet space reinforces "
+                   f"{pn['wrong_reinforced']:.0%} of wrong predictions (internal val), so it is not shown in the product.")
+    out.append(src(*rels))
+    return "\n\n".join(out)
+
+
+def final_model_section():
+    """Final model of the classifier sprint (eval/final_model_report.py, eval/final_locked_look.py)."""
+    rel_a, rel_b = "eval/output/stage_c/final/final_model_report.json", "eval/output/stage_c/locked_final/locked_final.json"
+    a, b = load(rel_a), load(rel_b)
+    if not a:
+        return "## Final model (classifier sprint)" + chr(10) + chr(10) + "Not run yet."
+    out = ["## Final model (classifier sprint, stage C)",
+           f"Run `{a['run']}`; temperature {a['temperature']:.2f}, standard threshold {a['threshold_standard']:.3f}, "
+           f"melanoma-head threshold {a['threshold_melanoma_head']:.3f} (all fit on validation data)."]
+    rows = []
+    for n in ("v2_val", "v2_test", "midas_dev_val", "midas_dev_test"):
+        x = a[n]
+        s, m = x["standard"], x.get("melanoma_sensitive", {})
+        rows.append({"set": n, "n": x["n"], "AUROC": fmt(x["auroc"]), "ECE": fmt(x["ece"]),
+                     "sens / spec": f"{s['sensitivity']:.2f} / {s['specificity']:.2f}",
+                     "melanoma recall (standard / melanoma mode)": f"{s['melanoma_recall']:.2f} / {m.get('melanoma_recall', float('nan')):.2f}",
+                     "accuracy at 30% deferral": fmt(x["retained_accuracy_at_30pct_deferral"])})
+    out.append(table(rows, list(rows[0])))
+    if b:
+        rows = []
+        for s_, v in b["sets"].items():
+            p = v["paired_vs_v2_seed0"]["AUROC"]
+            rows.append({"locked set": s_, "AUROC [95% CI]": fmt(v["AUROC"]["value"]) + " [{:.2f}, {:.2f}]".format(*v["AUROC"]["ci95"]),
+                         "v2 seed 0": fmt(v["baseline_v2_seed0_auroc"]), "paired diff": f"{p['diff']:+.3f}" + ("*" if p["significant"] else ""),
+                         "ECE": fmt(v["ece_calibrated"]), "entropy AUROC for errors": fmt(v["entropy AUROC for errors"])})
+        out.append("**Locked external sets, one look** (paired bootstrap vs v2 seed 0; * = CI excludes 0)" + chr(10) + chr(10)
+                   + table(rows, list(rows[0])))
+        k = b["k"]
+        out.append(f"K6 mean AUROC {k['K6_mean_auroc']:.3f} (baseline {k['K6_baseline_v2_seed0']:.3f}); DDI by tone "
+                   + ", ".join(f"{g} {v:.2f}" for g, v in k["K7_ddi_auroc_by_tone"].items())
+                   + f"; mean entropy AUROC for errors {k['K8_entropy_auroc_for_errors_mean']:.2f}.")
+    out.append(src(rel_a, *( [rel_b] if b else [] )))
+    return chr(10).join(out[:2] + [chr(10).join([out[2]])] + out[3:]) if False else (chr(10) + chr(10)).join(out)
+
+
 def main(opts):
     try:
         commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True,
@@ -383,7 +543,8 @@ def main(opts):
         "Numbers are read from the output files named under each section. Older outputs (e.g. features v0.2, "
         "the split-v1 ResNet50) are labelled as such; re-run the pipeline step to refresh them.",
         criteria_section(runs), baseline_section(), masks_section(), trees_section(), concepts_section(),
-        llm_section(runs), c6_gradcam_section(), new_checks_section(), d5_section(), model_comparison_section(),
+        llm_section(runs), c6_gradcam_section(), new_checks_section(), d5_section(), judge_section(),
+        model_comparison_section(), external_section(), sprint_section(), final_model_section(), interpretability_section(),
     ]
     out = Path(opts.out)
     out.write_text("\n\n".join(parts) + "\n", encoding="utf-8", newline="\n")

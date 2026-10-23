@@ -6,6 +6,7 @@
 #
 #   sbatch --account=def-omar12_gpu --export=ALL,CONFIG=medir_v3.json slurm/narval_v3_det.sh
 #   sbatch --account=def-omar12_gpu --export=ALL,SEED=1 slurm/narval_v3_det.sh            # second seed
+#   sbatch --account=def-omar12_gpu --export=ALL,CLIN=0.33 slurm/narval_v3_det.sh         # clinical images drawn 33%
 #
 #SBATCH --job-name=medirai-v3-det
 #SBATCH --gpus-per-node=a100:1
@@ -22,6 +23,7 @@ CONFIG=${CONFIG:-medir_v3.json}
 LR=${LR:-3e-4}
 EPOCHS=${EPOCHS:-20}
 SEED=${SEED:-}                                     # empty = config seed (0)
+CLIN=${CLIN:-}                                     # clinical sampling share, e.g. 0.33 (empty = plain shuffle, ~11%)
 EXTRA=${EXTRA:-}
 export TORCH_HOME=${TORCH_HOME:-$HOME/.cache/torch}
 module load python/3.12 cuda
@@ -33,8 +35,9 @@ for d in ISIC_clinical ISIC_dermoscopic; do
 done
 
 cd "$REPO/uncertaintyNet-main"
-TAG=narval_v3_${CONFIG%.json}_lr${LR}${SEED:+_s$SEED}_$(date +%Y%m%d)
+TAG=narval_v3_${CONFIG%.json}_lr${LR}${SEED:+_s$SEED}${CLIN:+_clin$CLIN}_$(date +%Y%m%d)
 if [ -n "$SEED" ]; then EXTRA="$EXTRA --seed $SEED"; fi
+if [ -n "$CLIN" ]; then EXTRA="$EXTRA --clinical_share $CLIN"; fi
 python train.py --config "$CONFIG" --dataset_path "$DATA" --lr "$LR" --epochs "$EPOCHS" --no_date --no_compile \
   --save_path "output/$TAG/resnet50_det" $EXTRA
 cd "$REPO"

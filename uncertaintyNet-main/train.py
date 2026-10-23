@@ -42,6 +42,10 @@ parse_in.add_argument('--network_type', type=str, default=None, choices=['determ
 parse_in.add_argument('--train_fraction', type=float, default=None,
 					help='MEDIRV2: train on this fraction of training lesion groups (learning curves); val/test unchanged')
 parse_in.add_argument('--subsample_seed', type=int, default=0, help='seed for --train_fraction')
+parse_in.add_argument('--clinical_share', type=float, default=None,
+					help='MEDIRV2: sample clinical train images with this total probability (split v3 has ~11%% clinical)')
+parse_in.add_argument('--balance_diagnosis', type=float, default=None,
+					help='MEDIRV2: sample train images with weight count(diagnosis_3)^-POWER (stage B: 0.5)')
 parse_in.add_argument('--epochs',       type=int, default=None, help='override Training/Parameters/num_epochs')
 parse_in.add_argument('--lr',           type=float, default=None, help='override Training/Parameters/lr')
 parse_in.add_argument('--no_likelihood_std', action='store_true',
@@ -66,6 +70,10 @@ if opts.init_network is not None:
 if opts.train_fraction is not None:
 	config["Training"]["Dataset"]["train_fraction"] = opts.train_fraction
 	config["Training"]["Dataset"]["subsample_seed"] = opts.subsample_seed
+if opts.clinical_share is not None:
+	config["Training"]["Dataset"]["clinical_share"] = opts.clinical_share
+if opts.balance_diagnosis is not None:
+	config["Training"]["Dataset"]["balance_diagnosis"] = opts.balance_diagnosis
 if opts.epochs is not None:
 	config["Training"]["Parameters"]["num_epochs"] = opts.epochs
 	if config["Training"]["LR Scheduler"]["scheduler_type"].upper() == "COSINE":

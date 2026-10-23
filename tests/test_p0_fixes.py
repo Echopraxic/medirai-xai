@@ -269,3 +269,17 @@ def test_train_subsample_keeps_whole_groups_and_label_balance():
     assert abs(sub.group_id.nunique() / train.group_id.nunique() - 0.25) < 0.01
     assert abs(sub.label.mean() - train.label.mean()) < 0.03
     assert sub.equals(dataset.subsample_train(train, 0.25, seed=0))   # reproducible
+
+
+def test_clinical_share_sampler_hits_requested_share():
+    import dataset
+    train = dataset.load_split("../splits/isic_v3_clinical_plus_derm.csv").query("split == 'train'").reset_index(drop=True)
+    sampler = dataset.modality_sampler(train, 0.4, torch.Generator().manual_seed(0))
+    idx = np.fromiter(iter(sampler), dtype=int)
+    assert len(idx) == len(train)                                         # epoch length unchanged
+    share = (train.modality.to_numpy()[idx] == "clinical").mean()
+    assert abs(share - 0.4) < 0.01
+    again = np.fromiter(iter(dataset.modality_sampler(train, 0.4, torch.Generator().manual_seed(0))), dtype=int)
+    assert (idx == again).all()                                           # reproducible
+    with pytest.raises(ValueError):
+        dataset.modality_sampler(train[train.modality == "clinical"], 0.4)  # v2-only train set: nothing to reweight

@@ -27,7 +27,7 @@ import monai
 
 from PIL import Image
 from scipy.ndimage import distance_transform_edt
-from torch.utils.data import Dataset, DataLoader, ConcatDataset
+from torch.utils.data import Dataset, DataLoader, ConcatDataset, WeightedRandomSampler
 from torchvision.datasets import ImageFolder
 from torchvision import transforms, datasets
 
@@ -209,6 +209,29 @@ def subsample_train(df_train, fraction, seed=0):
 	return df_train[df_train["group_id"].isin(set(keep))].reset_index(drop=True)
 
 
+def modality_sampler(df_train, clinical_share, generator=None):
+	"""Sampler that draws clinical images with total probability `clinical_share` (split v3: 4,729 clinical vs 37,248
+	dermoscopic train images, so plain shuffling gives clinical ~11%). Draws with replacement, len(df_train) per epoch,
+	so the epoch length and the LR schedule match an unweighted run."""
+	is_clin = (df_train["modality"] == "clinical").to_numpy()
+	if not 0 < clinical_share < 1 or is_clin.all() or not is_clin.any():
+		raise ValueError("clinical_share needs 0 < share < 1 and both clinical and non-clinical train images")
+	w = np.where(is_clin, clinical_share / is_clin.sum(), (1 - clinical_share) / (~is_clin).sum())
+	return WeightedRandomSampler(torch.as_tensor(w, dtype=torch.double), num_samples=len(df_train),
+								 replacement=True, generator=generator)
+
+
+def diagnosis_sampler(df_train, power=0.5, generator=None):
+	"""Sampler that draws each image with weight count(its diagnosis_3)^-power (0.5: inverse square root, fixed before
+	stage B), so rare diagnoses (SK, other benign, melanoma) are seen more often than in the BCC-dominated train set.
+	Draws with replacement, len(df_train) per epoch, so the epoch length and the LR schedule are unchanged."""
+	dx = df_train["diagnosis_3"].fillna("unknown").to_numpy()
+	counts = pd.Series(dx).value_counts()
+	w = np.array([counts[d] for d in dx], dtype=float) ** -power
+	return WeightedRandomSampler(torch.as_tensor(w / w.sum(), dtype=torch.double), num_samples=len(df_train),
+								 replacement=True, generator=generator)
+
+
 def medirv2_transforms(input_size):
 	"""(train, test) transforms for MEDIRV2; shared with evaluation scripts so preprocessing never drifts."""
 	normalize = transforms.Normalize(mean=[0.6689, 0.5090, 0.4417],
@@ -234,6 +257,7 @@ def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: boo
 
 	dataset = data_config["dataset"]
 	train_shuffle = True if data_config["kfold"] < 2 else False
+	train_sampler = None
 	
 	if dataset.upper() == "MEDIRV1":
 
@@ -303,6 +327,14 @@ def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: boo
 			else:
 				train_data = ISICDatasetV2(df_train, data_dir, transform=train_transform)
 				test_data = ISICDatasetV2(df_val, data_dir, transform=test_transform)
+				if data_config.get("clinical_share") is not None and data_config.get("balance_diagnosis") is not None:
+					raise ValueError("clinical_share and balance_diagnosis are separate stage-B arms; use one")
+				if data_config.get("clinical_share") is not None:
+					train_sampler = modality_sampler(df_train, data_config["clinical_share"], generator)
+					train_shuffle = False
+				if data_config.get("balance_diagnosis") is not None:
+					train_sampler = diagnosis_sampler(df_train, data_config["balance_diagnosis"], generator)
+					train_shuffle = False
 
 	elif dataset.upper() == "ISIC2018":
 
@@ -351,7 +383,7 @@ def get_dataloader(root: str, input_size: int=0, data_config: dict={}, test: boo
 			return train_data, None 
 		
 		train_loader = DataLoader(dataset=train_data, batch_size=data_config["batch_size"],
-							shuffle=train_shuffle, pin_memory=True, drop_last=True,
+							shuffle=train_shuffle, sampler=train_sampler, pin_memory=True, drop_last=True,
 							generator=generator if train_shuffle else None)
 	
 	if data_config["run_val"] or test: 

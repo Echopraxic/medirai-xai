@@ -51,6 +51,12 @@ bash slurm/rorqual_llm_setup.sh
 | `rorqual_baseline_v2.sh` | ResNet50 deterministic + both variational objectives on split v2 (`configs/medir_v2.json`: lr 1e-4, 30 epochs, cosine), then prediction export, baseline report and the per-image uncertainty/deferral table | ≤ 6 h |
 | `rorqual_llm.sh` | Every generator × prompt on the test split with greedy decoding, the template arm on the same inputs, the verifier, and a comparison table | ≤ 3 h |
 | `rorqual_vlm_concepts.sh` | Qwen2.5-VL answers Derm7pt concept questions (clinical and dermoscopic photos), scored against the expert labels | ≤ 4 h |
+| `rorqual_llm_d5.sh` | D5 checks beyond the verifier: counterfactual sensitivity, repeat determinism, prompt-paraphrase robustness, similar-input consistency, NLI claim check | ≤ 6 h |
+| `narval_v3_det.sh` | Deterministic ResNet50 on split v3 (v2 + ISIC dermoscopic in train; v2 val/test); options `SEED`, `CLIN` (clinical sampling share), `CONFIG`, `LR` | ≤ 5 h |
+| `narval_multiclass.sh` | 7-class diagnosis head on split v2, then the binary baseline report | ≤ 30 min |
+| `narval_llm_judge.sh` | LLM-as-judge (`JUDGE=` Gemma-3-27B or Llama-3.3-70B AWQ) on the D5 base explanations plus planted-error controls | ≤ 3 h |
+| `narval_stage_b.sh` | Classifier sprint: one ResNet50 per job (`ARM`, `SEED`; the script header lists every arm, from stage B's ref / v4 to stage C's distilled students and part 2's `kdv7_mel` / `kdv6_mel_cons`), then the selection score; `ARM=score RUN=...` scores an existing run, `ARM=tta RUN=...` writes its per-image TTA scores incl. the darker-skin dev set | ≤ 3 h |
+| `narval_sprint2_data.sh` | Sprint part 2 data: the Fitzpatrick17k darker-skin dev set, split v7 (v6 + Mendeley light/dark pairs) and the pairs file, images cached into the training folder, then DINOv2-L embeddings of the dev set. Run once before the part-2 arms (`--dependency=afterok:<job>`) | ≤ 2 h |
 | `rorqual_baseline.sh` | Original split-v1 baseline (kept for reference) | ≤ 4 h |
 
 ```bash
@@ -83,5 +89,8 @@ Outputs land under the code folder (`uncertaintyNet-main/output/`, `eval/output/
   `$HF_HOME/hub/models--<org>--<name>/refs/main`. (`du` on the cache shows a few MB because the blobs are symlinks:
   use `du -shL .../snapshots`.)
 - **Windows line endings** make `sbatch` refuse a script; keep scripts LF.
+- **A stalled login-node filesystem can leave 0-byte files.** During the 2026-10-22 Lustre stall a copied script
+  arrived empty, and Python ran it silently with exit code 0. After copying during a stall, compare `md5sum` with the
+  local file.
 - Laptop runs (`--batch_size 32 --grad_accum 4 --amp`) and cluster runs (batch 128, no AMP) differ slightly, because
   BatchNorm sees 32 instead of 128 images per step.

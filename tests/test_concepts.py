@@ -31,3 +31,18 @@ def test_phrase_bank_status_rules():
     monet = {"pairs": {"MONET_erythema~C_r": 0.07}}
     assert judge(("monet", "MONET_erythema~C_r"), "C_r", None, monet, None)[0] == "failed"
     assert judge(("derm7pt", "elevation"), "T_r", None, None, {"elevation": {"T_r": 0.64}})[0] == "partial"
+
+
+def test_c2_results_skip_confounded_and_monet_rows():
+    sys.path.insert(0, str(ROOT / "concepts"))
+    from phrase_bank import c2_results
+    c2 = {"confirmatory": [
+        {"dataset": "skincon", "concept": "Black", "candidate": "C_frac_black", "kind": "handcrafted", "status": "validated",
+         "auroc": 0.84, "diagnosis_confounded": False},
+        {"dataset": "skincon", "concept": "Yellow", "candidate": "C_frac_black", "kind": "handcrafted", "status": "validated",
+         "auroc": 0.80, "diagnosis_confounded": True},                                    # driven by diagnosis: ignored
+        {"dataset": "skincon", "concept": "Black", "candidate": "M_dark_pigment", "kind": "MONET", "status": "validated",
+         "auroc": 0.94, "diagnosis_confounded": False}]}                                  # MONET is not a phrase-bank feature
+    r = c2_results("C_frac_black", c2)
+    assert len(r) == 1 and r[0][0] == "validated" and "0.84" in r[0][1]
+    assert c2_results("C_frac_black", None) == []

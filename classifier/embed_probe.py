@@ -30,7 +30,30 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "uncertaintyNet-main"))
 import dataset  # noqa: E402
 
-MODELS = {"dinov2": "facebook/dinov2-large", "monet": "chanwkim/monet"}
+MODELS = {"dinov2": "facebook/dinov2-large", "monet": "chanwkim/monet",
+          "panderm": "PanDerm ViT-L/16 (Yan et al. 2025), panderm_ll_data6_checkpoint-499.pth, CC-BY-NC-ND: research only"}
+PANDERM_CKPT = Path.home() / ".cache/panderm/panderm_ll_data6_checkpoint-499.pth"
+
+
+def load_panderm():
+    """PanDerm's encoder (CAE-style ViT-L/16) in timm's VisionTransformer: layer-scale gamma_1/2 -> ls1/ls2.gamma,
+    split q/v biases -> one qkv bias (k bias 0). Strict load, so any unmapped key fails. No third-party code is run."""
+    import timm
+    sd = torch.load(PANDERM_CKPT, map_location="cpu", weights_only=True)
+    enc = {k[len("encoder."):]: v for k, v in sd.items() if k.startswith("encoder.")}
+    out = {}
+    for k, v in enc.items():
+        if k.endswith("attn.q_bias"):
+            pre = k[: -len("q_bias")]
+            out[pre + "qkv.bias"] = torch.cat([v, torch.zeros_like(v), enc[pre + "v_bias"]])
+        elif k.endswith("attn.v_bias"):
+            continue
+        else:
+            out[k.replace("gamma_1", "ls1.gamma").replace("gamma_2", "ls2.gamma")] = v
+    model = timm.create_model("vit_large_patch16_224", pretrained=False, num_classes=0, init_values=1e-5,
+                              global_pool="avg", fc_norm=False)
+    model.load_state_dict(out, strict=True)
+    return model
 EMB_DIR = ROOT / "classifier" / "output" / "embeddings"
 C_GRID = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 1.0]
 
@@ -38,6 +61,13 @@ C_GRID = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 1.0]
 def load_backbone(name, device):
     from transformers import AutoImageProcessor, AutoModel, CLIPModel, CLIPProcessor
     repo = MODELS[name]
+    if name == "panderm":
+        from transformers import CLIPImageProcessor
+        model = load_panderm()
+        proc = CLIPImageProcessor(size={"shortest_edge": 224}, crop_size={"height": 224, "width": 224},
+                                  image_mean=[0.485, 0.456, 0.406], image_std=[0.229, 0.224, 0.225])
+        model.eval().to(device)
+        return (lambda px: model(px)), proc  # mean of the normalized patch tokens
     if name == "monet":
         model, proc = CLIPModel.from_pretrained(repo), CLIPProcessor.from_pretrained(repo)
         def fn(px):  # transformers >= 5 returns an output object, older versions the tensor
@@ -54,8 +84,13 @@ def load_backbone(name, device):
 @torch.no_grad()
 def embed(opts):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_dir = Path(opts.dataset_path) / "ISIC_clinical"
-    df = dataset.load_split(str(ROOT / "splits/isic_clinical_v2.csv"), str(data_dir))
+    if opts.split_csv:  # any image set, e.g. MIDAS: <image_dir>/<id>.jpg for the non-excluded rows of the csv
+        data_dir = Path(opts.image_dir)
+        df = pd.read_csv(opts.split_csv)
+        df = df[df.split != "excluded"].rename(columns={opts.id_column: "isic_id"}).reset_index(drop=True)
+    else:
+        data_dir = Path(opts.dataset_path) / "ISIC_clinical"
+        df = dataset.load_split(str(ROOT / "splits/isic_clinical_v2.csv"), str(data_dir))
     fn, proc = load_backbone(opts.model, device)
     feats = []
     for i in range(0, len(df), opts.batch_size):
@@ -67,9 +102,10 @@ def embed(opts):
         if (i // opts.batch_size) % 20 == 0:
             print(f"{i + len(ids)}/{len(df)}", flush=True)
     EMB_DIR.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(EMB_DIR / f"{opts.model}.npz", isic_id=df.isic_id.values, emb=np.concatenate(feats).astype(np.float16),
+    name = f"{opts.model}__{opts.tag}.npz" if opts.tag else f"{opts.model}.npz"
+    np.savez_compressed(EMB_DIR / name, isic_id=df.isic_id.values, emb=np.concatenate(feats).astype(np.float16),
                         repo=MODELS[opts.model])
-    print(f"wrote {EMB_DIR / f'{opts.model}.npz'}")
+    print(f"wrote {EMB_DIR / name}")
 
 
 def probe(opts):
@@ -111,5 +147,9 @@ if __name__ == "__main__":
     ap.add_argument("--model", choices=list(MODELS), required=True)
     ap.add_argument("--dataset-path", default=str(ROOT / "uncertaintyNet-main/datasets_768"))
     ap.add_argument("--batch_size", type=int, default=32)
+    ap.add_argument("--split_csv", default="", help="embed: another image set (e.g. splits/midas_v1.csv)")
+    ap.add_argument("--id_column", default="isic_id")
+    ap.add_argument("--image_dir", default="")
+    ap.add_argument("--tag", default="", help="embed: output <model>__<tag>.npz")
     opts = ap.parse_args()
     embed(opts) if opts.step == "embed" else probe(opts)

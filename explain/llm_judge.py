@@ -162,16 +162,24 @@ class MockJudge:
                             "clinical_tone": 4, "overall_faithfulness": 5}) for n in n_reasons]
 
 
+def judge_engine_kwargs(model_id):
+    """vLLM engine options per judge. Gemma-3 under JSON-schema decoding with free whitespace emitted newlines until
+    max_new_tokens on every item (2026-10-18 run, parse_ok 0), so its JSON is forced compact."""
+    extra = {"tensor_parallel_size": int(os.environ.get("VLLM_TP", "1")),
+             "dtype": "auto" if "awq" in model_id.lower() else "bfloat16"}
+    if "gemma-3" in model_id.lower():
+        extra["limit_mm_per_prompt"] = {"image": 0}  # text-only use of a multimodal checkpoint
+        extra["structured_outputs_config"] = {"backend": "xgrammar", "disable_any_whitespace": True}
+    return extra
+
+
 class VLLMJudge:
     def __init__(self, model_id, revision=None):
         from llm_generate import vllm_chat, vllm_sampling
         from vllm import LLM
-        extra = {"tensor_parallel_size": int(os.environ.get("VLLM_TP", "1"))}
-        if "gemma-3" in model_id.lower():
-            extra["limit_mm_per_prompt"] = {"image": 0}  # text-only use of a multimodal checkpoint
-        dtype = "auto" if "awq" in model_id.lower() else "bfloat16"
-        self.llm = LLM(model=model_id, revision=revision, seed=DECODING["seed"], dtype=dtype, max_model_len=4096,
-                       **extra)
+        self.engine_kwargs = judge_engine_kwargs(model_id)
+        self.llm = LLM(model=model_id, revision=revision, seed=DECODING["seed"], max_model_len=4096,
+                       **self.engine_kwargs)
         self.params, self.guided = vllm_sampling(JUDGE_SCHEMA, DECODING["max_new_tokens"])
         self._chat = vllm_chat
         self.name, self.revision = model_id, revision or "see HF cache snapshot"
@@ -278,10 +286,19 @@ def run(opts):
                 "generations": [str(p) for p in opts.gens],
                 "generations_sha256_16": {str(p): hashlib.sha256(Path(p).read_bytes()).hexdigest()[:16] for p in opts.gens},
                 "n_items": len(items), "seconds": round(time.time() - t0, 1), "python": platform.python_version(),
-                "vllm_tp": os.environ.get("VLLM_TP", "1")}
+                "vllm_tp": os.environ.get("VLLM_TP", "1"),
+                "engine_kwargs": {k: v for k, v in getattr(backend, "engine_kwargs", {}).items() if k != "tensor_parallel_size"}}
     (out / "run_manifest.json").write_text(json.dumps(manifest, indent=1))
     (out / "judge_summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary, indent=1))
+    bad = parse_failures(summary)
+    if bad:
+        raise SystemExit(f"judge output unparseable on: {bad} (see judgments.jsonl 'raw'); results not usable")
+
+
+def parse_failures(summary, min_ok=0.9):
+    """Arms whose judgments mostly failed to parse; a run like that must fail the job, not finish as COMPLETED."""
+    return {arm: s["parse_ok"] for arm, s in summary["arms"].items() if s["parse_ok"] < min_ok}
 
 
 # ---------------------------------------------------------------- human ratings
