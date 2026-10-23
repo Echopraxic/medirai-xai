@@ -37,7 +37,8 @@ poc-nrc-main/  legacy NRC CNN/foundation-model ensemble (P0-fixed; models must b
 | Split | `splits/isic_clinical_v2.csv` | 6,743 images, 70/10/20 grouped by lesion and patient, seed 42. v1 minus the 1,240 MSKCC images (unbiopsied, contact-like photos that formed a benign shortcut). Never re-split; new data becomes a new version |
 | Lesion masks | clinical fine-tuned ResNet18-UNet | Chosen on 97 hand-traced gold masks (`segmentation/gold/`); quality flag `quality_flag_v1` |
 | Feature table | `features/output/feature_table_v1.0.parquet` | 42 features; `mask_quality` and the other QA columns are never model inputs |
-| Explained model | deterministic ResNet50 | Split v2, lr 3e-4, seed 0, with 8-view test-time augmentation (interim, until the classifier sprint's model is frozen). Split v3 (v2 + ISIC dermoscopic images in train) was dropped: better internally, worse on external sets |
+| Explained model | deterministic ResNet50 | Split v2, lr 3e-4, seed 0, with 8-view test-time augmentation (interim, until the classifier sprint's model is frozen Nov 23–29). Split v3 (v2 + ISIC dermoscopic images in train) was dropped: better internally, worse on external sets. Sprint final candidate (2026-10-22): a ResNet50 distilled from a 12-model ensemble, split v6, with a melanoma head |
+| Sprint splits | v4 (+ MIDAS phone photos), v6 (v4 + Derm7pt, Asan/SNU), v7 (v6 + Mendeley light/dark pairs) | Extra sources are train-only; val/test rows stay split v2's (+ MIDAS dev_val/dev_test). `splits/f17k_dsd_v1.csv` is the darker-skin dev set (Fitzpatrick17k FST V–VI, selection only) |
 | Classifier evaluation | locked external sets + selection data | DDI, DDI-2, MCR-SL and ISIC clinical overview are scored only for final candidates (`eval/external_test.py --final`, every look logged). Model choices use split v2 val + MIDAS dev_val (`eval/selection_score.py`) |
 
 Generated files (images, masks, feature tables, model outputs) are not in git; each script below rebuilds them.
@@ -95,6 +96,9 @@ python tools/download_redivis.py --out <dir> <redivis dataset refs>      # MRA-M
 python splits/make_midas_split.py && python splits/make_split_v4.py
 python eval/selection_score.py --run <run_dir>                            # split v2 val + MIDAS dev_val, with TTA
 python eval/external_test.py --source midas --runs <run_dir> ...          # locked sets need --final '<reason>'
+python splits/make_split_v7.py --f17k_dir <dir> --mendeley_dir <dir> --image_dir <dir> ...   # darker-skin dev set + split v7 (Narval)
+python eval/tta_scores.py --run <run_dir> ...                             # per-image TTA scores incl. the darker-skin dev set
+python eval/sprint2_analysis.py --arm S0=<runs> --arm S2=<runs> --arm S4=<runs>   # arms, ensemble, deferral, per-domain calibration
 
 # 7. collect every headline number into a local results page (RESULTS.md, not committed)
 python tools/make_results.py
