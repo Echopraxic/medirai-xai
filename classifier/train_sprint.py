@@ -15,6 +15,10 @@ Options (each batch-2 arm changes one thing against the hygiene recipe):
                         loss += W * BCE (pos_weight = sqrt(neg/pos) on train); enables the melanoma-sensitive mode
   --photo_aug           B2: phone degradations (JPEG 30-90, blur, exposure) + melanin-like darkening (blue reduced
                         more than red; heuristic, applied to the whole image)
+  --pairs_csv F --consistency W
+                        arm S4 (prereg 2026-10-23): light/dark image pairs (columns orig_id, synth_id; e.g. the Mendeley
+                        I2SB pairs) seen with the same augmentation; loss += W * symmetric KL between the two softmax
+                        outputs. Pairs carry no label or KD loss; they share the main batch's forward pass (BatchNorm)
 Checkpoint = best val AUROC (val = the split's val rows: split v2 val, or v2 val + MIDAS dev_val for split v4).
 Writes the same files as uncertaintyNet runs (checkpoint_best_val.pth.tar, config.json, log.csv, predictions.csv,
 embeddings.npz), so eval/selection_score.py, trees/, eval/gradcam_arm.py and interpret/ read it unchanged.
@@ -73,6 +77,34 @@ class MelaninDarken:
             return x
         a = random.uniform(0.45, 0.85)
         return (x * torch.tensor([a, a * 0.9, a * 0.8]).view(3, 1, 1)).clamp(0, 1)
+
+
+class PairDataset(torch.utils.data.Dataset):
+    """Tone pairs for the consistency term: both images get the same random augmentation (python and torch RNG seeded
+    identically inside a forked RNG state, so the worker's own streams are left untouched)."""
+    def __init__(self, pairs, data_dir, tf):
+        self.pairs, self.data_dir, self.tf = list(zip(pairs.orig_id, pairs.synth_id)), Path(data_dir), tf
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, k):
+        seed = int(torch.randint(0, 2 ** 31 - 1, (1,)))
+        out = []
+        for i in self.pairs[k]:
+            im = Image.open(self.data_dir / f"{i}.jpg").convert("RGB")
+            state = random.getstate()
+            with torch.random.fork_rng(devices=[]):
+                random.seed(seed)
+                torch.manual_seed(seed)
+                out.append(self.tf(im))
+            random.setstate(state)
+        return out[0], out[1]
+
+
+def forever(loader):
+    while True:
+        yield from loader
 
 
 def make_transforms(input_size, stats, photo_aug=False):
@@ -190,6 +222,13 @@ def kd_loss(student_logits, teacher_probs, T):
     return F.kl_div(log_s, teacher_probs, reduction="batchmean") * T * T
 
 
+def symmetric_kl(a, b):
+    """0.5 * (KL(p_a || p_b) + KL(p_b || p_a)) on softmax outputs (T = 1), batch mean."""
+    la, lb = F.log_softmax(a.float(), dim=1), F.log_softmax(b.float(), dim=1)
+    return 0.5 * (F.kl_div(lb, la, log_target=True, reduction="batchmean")
+                  + F.kl_div(la, lb, log_target=True, reduction="batchmean"))
+
+
 # ------------------------------------------------------------------------------------------------ train / eval
 @torch.no_grad()
 def predict(model, loader, device, amp):
@@ -229,6 +268,13 @@ def main(opts):
                           shuffle=True, drop_last=True, generator=g, **kw)
     eval_dl = {s: DataLoader(dataset.ISICDatasetV2(parts[s], data_dir, test_tf), batch_size=opts.batch_size, **kw)
                for s in parts}
+    pair_iter = None
+    if opts.consistency > 0:
+        pairs = pd.read_csv(ROOT / "splits" / opts.pairs_csv)
+        if opts.limit:
+            pairs = pairs.head(opts.limit)
+        pair_iter = forever(DataLoader(PairDataset(pairs, data_dir, train_tf), batch_size=opts.pair_batch, shuffle=True,
+                                       drop_last=True, generator=torch.Generator().manual_seed(opts.seed + 1), **kw))
 
     model = build_model(opts.backbone, opts.offline, opts.mel_head > 0).to(device)
     is_mel = {i: "Melanoma" in str(d) for i, d in zip(parts["train"].isic_id, parts["train"].diagnosis_3)}
@@ -261,7 +307,13 @@ def main(opts):
         for x, y, ids in train_dl:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             with torch.autocast(device.type, enabled=amp):
-                logits, f = model(x)
+                if pair_iter is not None:  # one forward pass: labelled batch, then the light and the dark half of the pairs
+                    xo, xs = (t.to(device, non_blocking=True) for t in next(pair_iter))
+                    logits_all, f_all = model(torch.cat([x, xo, xs]))
+                    n0, n1 = len(x), len(x) + len(xo)
+                    logits, f, pair_o, pair_s = logits_all[:n0], f_all[:n0], logits_all[n0:n1], logits_all[n1:]
+                else:
+                    logits, f = model(x)
                 loss = F.cross_entropy(logits.float(), y, label_smoothing=opts.label_smoothing)
                 if opts.mel_head > 0:
                     target = torch.tensor([float(is_mel[i]) for i in ids], device=device)
@@ -271,6 +323,8 @@ def main(opts):
                     loss = (1 - opts.kd_alpha) * loss + opts.kd_alpha * kd_loss(logits, ens_teacher(x, opts.kd_T), opts.kd_T)
                 if teacher is not None:
                     loss = loss + opts.distill * (1 - F.cosine_similarity(proj(f.float()), teacher(x), dim=1)).mean()
+                if pair_iter is not None:
+                    loss = loss + opts.consistency * symmetric_kl(pair_o, pair_s)
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.step(opt)
@@ -345,6 +399,9 @@ if __name__ == "__main__":
     ap.add_argument("--kd_T", type=float, default=2.0, help="distillation temperature")
     ap.add_argument("--photo_aug", action="store_true")
     ap.add_argument("--mel_head", type=float, default=0.0, help="weight of the melanoma-head BCE loss (0 = no head)")
+    ap.add_argument("--pairs_csv", default="mendeley_pairs_v1.csv", help="tone pairs under splits/ (orig_id, synth_id)")
+    ap.add_argument("--consistency", type=float, default=0.0, help="weight of the tone-consistency loss (0 = off)")
+    ap.add_argument("--pair_batch", type=int, default=32)
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--batch_size", type=int, default=128)
     ap.add_argument("--workers", type=int, default=8)

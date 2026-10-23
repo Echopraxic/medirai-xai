@@ -65,3 +65,30 @@ def test_ensemble_teacher_rejects_mismatched_input_size(tmp_path):
                                                       "normalization": "medir"}))
     with pytest.raises(ValueError):
         T.EnsembleTeacher([str(tmp_path)], input_size=224)
+
+
+def test_pair_dataset_gives_both_images_the_same_augmentation(tmp_path):
+    import numpy as np
+    import pandas as pd
+    from PIL import Image
+    import train_sprint as T
+    rng = np.random.default_rng(0)
+    arr = (rng.random((40, 40, 3)) * 255).astype("uint8")
+    for name in ("a", "b"):                            # identical pixels: only the augmentation could differ
+        Image.fromarray(arr).save(tmp_path / f"{name}.jpg", quality=100)
+    train_tf, _ = T.make_transforms(32, T.MEDIR_STATS)
+    ds = T.PairDataset(pd.DataFrame({"orig_id": ["a"], "synth_id": ["b"]}), tmp_path, train_tf)
+    torch.manual_seed(1)
+    xa, xb = ds[0]
+    assert torch.allclose(xa, xb)
+    torch.manual_seed(2)
+    xa2, _ = ds[0]
+    assert not torch.allclose(xa, xa2)                 # augmentation still random across calls
+
+
+def test_symmetric_kl_is_zero_for_equal_logits_and_symmetric():
+    import train_sprint as T
+    a = torch.tensor([[2.0, -1.0], [0.1, 0.4]])
+    b = torch.tensor([[0.0, 1.0], [1.0, -2.0]])
+    assert T.symmetric_kl(a, a).abs() < 1e-6
+    assert torch.allclose(T.symmetric_kl(a, b), T.symmetric_kl(b, a)) and T.symmetric_kl(a, b) > 0
