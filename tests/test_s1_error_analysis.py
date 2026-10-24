@@ -70,3 +70,30 @@ def test_contrast_ranks_the_feature_that_separates_groups():
     t, na, nb = contrast(d, ["C_a", "C_b"], values, {"C_a": "partial", "C_b": "failed"},
                          pd.Series(True, index=d.index), "FN", "TP")
     assert (na, nb) == (6, 6) and t.iloc[0].feature == "C_a" and t.iloc[0].shap_difference == -2.0
+
+
+# --- interpret/scin_labels.py ---------------------------------------------------------------------------------------
+sys.path.insert(0, str(ROOT / "interpret"))
+import scin_labels as scin  # noqa: E402
+
+
+def test_efst_median_tie_and_agreement():
+    lab = pd.DataFrame({"case_id": [1, 2, 3, 4],
+                        **{f"dermatologist_fitzpatrick_skin_type_label_{i}": v for i, v in
+                           zip((1, 2, 3), (["FST5", "FST4", "FST6", np.nan], ["FST5", "FST5", np.nan, np.nan],
+                                           ["FST6", np.nan, np.nan, np.nan]))},
+                        **{f"dermatologist_gradable_for_fitzpatrick_skin_type_{i}": v for i, v in
+                           zip((1, 2, 3), (["YES", "YES", "YES", "NO"], ["YES", "YES", None, None],
+                                           ["YES", None, None, None]))}})
+    e = scin.efst_labels(lab).set_index("case_id")
+    assert e.loc[1, "efst"] == 5 and e.loc[1, "dark_agreed"] and e.loc[1, "n_efst_raters"] == 3
+    assert e.loc[2, "efst_tie"] and e.loc[2, "dark"] == 0          # 4 and 5 -> 4.5 counts as not dark
+    assert e.loc[3, "dark"] == 1 and not e.loc[3, "dark_agreed"]    # one rater only
+    assert np.isnan(e.loc[4, "dark"])                               # ungradable
+
+
+def test_case_groups_join_cases_that_share_an_image():
+    cases = pd.DataFrame({"case_id": [1, 2, 3], "image_1_path": ["a.png", "b.png", "c.png"],
+                          "image_2_path": [np.nan, "a.png", np.nan], "image_3_path": [np.nan] * 3})
+    g = scin.case_groups(cases)
+    assert g[0] == g[1] and g[2] != g[0]
