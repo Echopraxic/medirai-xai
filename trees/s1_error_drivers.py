@@ -10,6 +10,9 @@ final_model_report.json. Then per stratum and per error type (TP / TN / FN / FP 
   - mean |SHAP| per concept group and per feature, and its share on C2-validated / partial / failed features
   - mean SHAP signed towards the ResNet's predicted class (+ = the tree's evidence agrees with the ResNet)
   - tree-ResNet agreement, and how well tree disagreement flags ResNet errors (AUROC) next to entropy
+  - per-diagnosis contrasts that test the "dark = benign, red/rough = malignant" reading: missed vs caught
+    melanomas, and LPLK/SK false alarms vs correctly benign LPLK/SK. Per feature: mean SHAP (log-odds of
+    malignant) and median feature value in each group, with a Mann-Whitney p-value on the SHAP values
 
     python trees/s1_error_drivers.py --results ~/Downloads/s1_results_2026-10-23 \
         --tree trees/output/s1_binary_v0.2 --out trees/output/s1_binary_v0.2/error_drivers
@@ -20,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import mannwhitneyu
 from sklearn.metrics import roc_auc_score
 
 from feature_validity import best_status
@@ -32,6 +36,28 @@ GROUP_NAMES = {"A": "asymmetry", "B": "border", "C": "color", "D": "diameter", "
 def entropy(p):
     p = np.clip(np.asarray(p, dtype=float), 1e-12, 1 - 1e-12)
     return -(p * np.log(p) + (1 - p) * np.log(1 - p))
+
+
+CONTRASTS = {
+    "melanoma_missed_vs_caught": (lambda d: d.diagnosis.str.contains("melanoma", case=False, na=False),
+                                  "FN", "TP"),
+    "lplk_sk_false_alarm_vs_correct": (lambda d: d.diagnosis.str.contains("seborrheic keratosis|lichen planus",
+                                                                          case=False, na=False), "FP", "TN"),
+}
+
+
+def contrast(d, feats, values, vstat, mask, a, b):
+    """Per-feature SHAP and feature-value differences between outcome a and outcome b within mask."""
+    ga, gb = d[mask & (d.outcome == a)], d[mask & (d.outcome == b)]
+    rows = []
+    for f in feats:
+        p = mannwhitneyu(ga[f], gb[f]).pvalue if len(ga) >= 5 and len(gb) >= 5 else np.nan
+        rows.append({"feature": f, "validity": vstat[f], f"shap_{a}": ga[f].mean(), f"shap_{b}": gb[f].mean(),
+                     "shap_difference": ga[f].mean() - gb[f].mean(), "p_mannwhitney": p,
+                     f"value_{a}_median": values.loc[ga.isic_id, f].median(),
+                     f"value_{b}_median": values.loc[gb.isic_id, f].median()})
+    t = pd.DataFrame(rows)
+    return t.reindex(t.shap_difference.abs().sort_values(ascending=False).index), len(ga), len(gb)
 
 
 def resnet_frame(res):
@@ -104,6 +130,16 @@ def main(opts):
             "|p_tree - p_resnet|": roc_auc_score(d.wrong, (d.p_tree - d.p_resnet).abs())}
     d.drop(columns=feats).to_csv(out / "test_rows.csv", index=False)
 
+    values = pd.read_parquet(opts.features).set_index("isic_id")[feats]
+    contrast_lines = []
+    for name, (select, a, b) in CONTRASTS.items():
+        t, na, nb = contrast(d, feats, values, vstat, select(d), a, b)
+        t.round(4).to_csv(out / f"contrast_{name}.csv", index=False)
+        contrast_lines += [f"### {name}: {a} (n = {na}) vs {b} (n = {nb})", "",
+                           "SHAP in log-odds of malignant (positive pushes the tree towards malignant); values are "
+                           "raw feature medians. p is uncorrected (exploratory).", "",
+                           t.head(opts.top).round(3).to_markdown(index=False), ""]
+
     lines = [f"# TreeSHAP on ResNet errors, internal test ({report['run']}; tree {tree.name})", "",
              f"n = {len(d)} test images with tree features (of {len(df)}); deferred = entropy > {threshold:.4f}; "
              f"ResNet threshold {report['threshold_standard']:.4f}.", "",
@@ -113,7 +149,8 @@ def main(opts):
              "AUROC for flagging ResNet errors:", "",
              pd.Series(flag).round(3).rename("auroc").to_frame().to_markdown(), "",
              "Features that differ most between confident-wrong and confident-right (signed towards prediction):",
-             "", diff.head(opts.top).to_markdown(index=False), ""]
+             "", diff.head(opts.top).to_markdown(index=False), "",
+             "## Per-diagnosis contrasts", ""] + contrast_lines
     (out / "summary.md").write_text("\n".join(lines))
     print("\n".join(lines))
 
@@ -122,6 +159,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results", required=True, help="unzipped s1_results folder")
     ap.add_argument("--tree", default="trees/output/s1_binary_v0.2")
+    ap.add_argument("--features", default="features/output/feature_table_v0.2.parquet",
+                    help="feature table the tree was trained on (for raw feature values)")
     ap.add_argument("--validation", default=None, help="c2_validation.json (default: in --results)")
     ap.add_argument("--out", default="trees/output/s1_binary_v0.2/error_drivers")
     ap.add_argument("--top", type=int, default=12)
