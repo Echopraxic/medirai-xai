@@ -198,3 +198,14 @@ def test_unvalidated_feature_is_never_the_cited_reason():
     contrib = pd.Series({"C_n_colors": 0.9, "C_color_entropy": 0.2, "C_frac_black": -0.1})
     assert representative(contrib) == "C_color_entropy"
     assert representative(pd.Series({"C_n_colors": 0.5})) == "C_n_colors"  # only member left: keep the group
+
+
+def test_external_features_refuse_locked_set_without_descriptive_reason(monkeypatch):
+    import argparse
+    sys.path.insert(0, str(ROOT / "features"))
+    import extract_external as ee
+    logged = []
+    monkeypatch.setattr(ee, "log_descriptive", lambda *a: logged.append(a))
+    with pytest.raises(SystemExit, match="locked"):
+        ee.main(argparse.Namespace(source="ddi", descriptive=None))
+    assert not logged                                                 # a refused read is not logged as a look
