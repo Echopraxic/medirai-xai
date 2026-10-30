@@ -146,3 +146,20 @@ def test_deferral_flag_overrides_entropy_threshold():
     assert not li.is_uncertain(rows[0]["llm_input"], 0.5) and li.is_uncertain(rows[1]["llm_input"], 0.5)
     out = attach_deferral.attach(rows, table)
     assert li.is_uncertain(out[0]["llm_input"], 0.5) and not li.is_uncertain(out[1]["llm_input"], 0.5)
+
+
+def test_fewshot_copy_flags_reused_example_sentences():
+    import fewshot_copy as fc
+    spec = {"examples": [{"evidence": [{"feature_id": "B_convexity", "finding": "smooth", "direction": "supports",
+                                        "strength": "moderate"}],
+                          "output": {"reasons": [{"text": "The border contour is smooth, which supports the benign prediction."}]}}]}
+    item = {"feature_id": "C_frac_red", "finding": "high", "direction": "supports", "strength": "weak"}
+    gens = [{"llm_input": {"evidence": [item]},
+             "final_output": {"reasons": [{"feature_id": "C_frac_red", "text": "The border contour is smooth, which supports the benign prediction."}]}},
+            {"llm_input": {"evidence": [item]},
+             "final_output": {"reasons": [{"feature_id": "C_frac_red", "text": "The share of red-toned areas is high."}]}},
+            {"llm_input": {"evidence": [dict(spec["examples"][0]["evidence"][0])]},
+             "final_output": {"reasons": [{"feature_id": "B_convexity", "text": "The border contour is smooth, which supports the benign prediction."}]}}]
+    s = fc.copy_stats(gens, spec)
+    assert (s["reasons"], s["copied"], s["same_item_reasons"], s["copied_same_item"]) == (2, 1, 1, 1)
+    assert s["copy_rate"] == 0.5

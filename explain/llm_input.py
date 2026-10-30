@@ -18,7 +18,7 @@ import json
 from template import PHRASES, encoding_label  # noqa: F401 (re-exported)
 
 LLM_INPUT_VERSION = "llm_input_v2"  # v2: independent_check_weak
-PHRASE_BANK_VERSION = "phrase_bank_v1_neutral"  # v1: neutral wording for unvalidated terms
+PHRASE_BANK_VERSION = "phrase_bank_v3_neutral"  # v1: neutral wording for unvalidated terms; v3: + validated MONET concepts
 
 # percentile of benign training lesions -> relative-position phrase (upper bound exclusive)
 PERCENTILE_BANDS = [

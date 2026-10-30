@@ -71,7 +71,7 @@ COUNT_WORDS = {"en": ["none", "one", "two", "three", "four", "five"], "fr": ["au
 
 class Explainer:
     def __init__(self, surrogate, gt_model, feats, benign_ref, strength_thresholds, entropy_threshold,
-                 backend=None, prompt="hybrid_v1", trees_dir=None, extras=None):
+                 backend=None, prompt="hybrid_v1", trees_dir=None, extras=None, status=None):
         import shap
         self.surrogate, self.gt_model, self.feats = surrogate, gt_model, feats
         self.shap = shap.TreeExplainer(surrogate, feature_perturbation="tree_path_dependent")
@@ -81,12 +81,14 @@ class Explainer:
                      else load_prompt(prompt))
         self.trees_dir = str(trees_dir) if trees_dir else None
         self.extras = extras  # interpret.explanation_features.ExplanationFeatures, or None (features off)
+        self.status = status  # phrase-bank status per feature: cite validated over failed (C1 decision 2026-10-30)
 
     @classmethod
     def from_dirs(cls, trees_dir, features_table, backend=None, prompt="hybrid_v1", entropy_threshold=None,
-                  explanation_run=None):
+                  explanation_run=None, phrase_bank=None):
         """Load the binary surrogate + ground-truth tree, validation strength tertiles and the benign reference.
-        entropy_threshold defaults to the validation 75th percentile stored with the trees' explanation inputs."""
+        entropy_threshold defaults to the validation 75th percentile stored with the trees' explanation inputs.
+        phrase_bank: csv with feature_id, status (e.g. concepts/output/phrase_bank_v3.csv), as treeshap_top3 --phrase_bank."""
         import xgboost as xgb
         trees = ROOT / trees_dir
         feats = json.loads((trees / "features_used.json").read_text())
@@ -107,7 +109,10 @@ class Explainer:
             sys.path.insert(0, str(ROOT / "interpret"))
             from explanation_features import ExplanationFeatures
             extras = ExplanationFeatures(explanation_run)
-        return cls(models[0], models[1], feats, ref, thresholds, entropy_threshold, backend, prompt, trees_dir, extras)
+        status = (dict(pd.read_csv(ROOT / phrase_bank)[["feature_id", "status"]].itertuples(index=False))
+                  if phrase_bank else None)
+        return cls(models[0], models[1], feats, ref, thresholds, entropy_threshold, backend, prompt, trees_dir, extras,
+                   status)
 
     def payload(self, features, prediction):
         """One case -> the structured payload treeshap_top3 writes (numbers included; never shown to the LLM)."""
@@ -119,7 +124,7 @@ class Explainer:
         g = grouped(signed, self.feats)
         not_encoded = self.extras.not_cited if self.extras else None   # labelled, not dropped (decision 2026-10-21)
         reasons = case_reasons(g.iloc[0], signed.iloc[0], x.iloc[0], self.feats, self.ref, self.thresholds,
-                               not_encoded=not_encoded)
+                               not_encoded=not_encoded, status=self.status)
         p_sur = float(self.surrogate.predict_proba(x)[0, 1])
         p_gt = float(self.gt_model.predict_proba(x)[0, 1])
         uncertainty = {"entropy_of_expected": float(prediction["entropy_of_expected"])}

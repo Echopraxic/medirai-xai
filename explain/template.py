@@ -51,6 +51,10 @@ PHRASES = {
     "S_solidity": ("compactness of the shape", "compact", "lobulated"),
     "S_extent": ("fill of the bounding box", "compact", "spread out"),
     "S_axis_ratio": ("roundness", "round", "elongated"),
+    # MONET concepts that passed C2 (features/add_monet.py, feature table v1.1): clinical names allowed
+    "C_monet_dark_pigment": ("amount of black or dark-brown pigment", "high", "low"),
+    "C_monet_vessels": ("visibility of blood vessels", "high", "low"),
+    "T_monet_ulceration_crust": ("amount of ulceration or crust", "high", "low"),
 }
 for i in range(1, 8):
     PHRASES[f"S_hu{i}"] = (f"shape moment {i} (not clinically mapped)", "high", "low")

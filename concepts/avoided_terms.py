@@ -33,12 +33,12 @@ AVOIDED = [
      ["erythem"], ["érythèm", "erythem"]),
     ("failed validation", "vessels / vascular structures / telangiectasia",
      "vaisseaux / structures vasculaires / télangiectasies",
-     "Red-area features do not track vessels; vascular patterns need dermoscopy.",
+     "Red-area features do not track vessels; only the MONET vessel score (validated, feature table v1.1) may name them, in its fixed words.",
      f"{MONET}: vessels vs red-area share 0.16, vs red tone -0.02; Derm7pt vascular structures (VLM) kappa <= 0.40",
      "share of red-toned areas", "proportion de zones de teinte rouge",
      ["vessel", "vascular", "telangiect", "arboriz"], ["vaisseau", "vasculaire", "télangiect", "arboris"]),
     ("failed validation", "ulceration / crust", "ulcération / croûte",
-     "Texture and yellow-tone features do not track ulceration or crust.",
+     "Texture and yellow-tone features do not track ulceration or crust; only the MONET score (validated, feature table v1.1) may name them, in its fixed words.",
      f"{MONET}: ulceration/crust vs roughness 0.14, vs texture contrast 0.14, vs yellow tone -0.07",
      "fine-scale image texture; yellow tone relative to surrounding skin",
      "texture de l'image à petite échelle; teinte jaune par rapport à la peau environnante",
@@ -110,11 +110,19 @@ COLUMNS = ["category", "term_en", "term_fr", "reason", "evidence", "say_instead_
            "stems_en", "stems_fr"]
 
 
+# Measures of the C2-validated MONET concepts (feature table v1.1): they may name vessels and ulceration/crust, but
+# only in these fixed words; the same terms anywhere else are still flagged.
+MONET_IDS = ("C_monet_dark_pigment", "C_monet_vessels", "T_monet_ulceration_crust")
+
+
 def strip_limitations(text):
-    """The fixed limitation sentences may name size/millimetres/evolution to say they cannot be assessed."""
+    """The fixed limitation sentences may name size/millimetres/evolution to say they cannot be assessed; the fixed
+    MONET measures may name the concept they validated against."""
     from llm_input import LIMITATIONS
-    for sentence in LIMITATIONS + lang_fr.LIMITATIONS_FR:
-        text = text.replace(sentence, " ")
+    from template import PHRASES
+    monet = [PHRASES[f][0] for f in MONET_IDS] + [lang_fr.PHRASES_FR[f][0] for f in MONET_IDS]
+    for sentence in LIMITATIONS + lang_fr.LIMITATIONS_FR + monet:
+        text = re.sub(re.escape(sentence), " ", text, flags=re.I)
     return text
 
 

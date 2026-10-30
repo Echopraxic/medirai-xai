@@ -105,16 +105,34 @@ def fit_tone_classifier():
     print(json.dumps(res, indent=1))
 
 
+# Adopted 2026-10-30 (plan §8): +SCIN detector with one threshold per close-up / phone route
+# (eval/refit_detectors_scin.py --write). tone_model.npz is the earlier single-threshold detector, kept for reproducibility.
+TONE_MODEL = "tone_model_scin_domain.npz"
+
+
+def _logistic(x, mean, scale, coef, intercept):
+    z = (np.asarray(x, dtype=np.float64) - mean) / scale
+    return float(1 / (1 + np.exp(-(z @ coef + intercept))))
+
+
 class ToneScope:
-    """Runtime rule: DINOv2-L CLS embedding -> (flag, probability of 'darker skin')."""
-    def __init__(self):
-        z = np.load(OUT / "tone_model.npz")
+    """Runtime rule: DINOv2-L CLS embedding -> (flag, probability of 'darker skin'). A model file with a router flags
+    against the threshold of the image's route (phone if the router's p >= 0.5, else close-up)."""
+    def __init__(self, path=None):
+        z = np.load(OUT / (path or TONE_MODEL))
         self.m = {k: z[k] for k in z.files}
 
+    def threshold(self, dinov2_emb):
+        m = self.m
+        if "router_coef" not in m:
+            return float(m["threshold"])
+        phone = _logistic(dinov2_emb, m["router_mean"], m["router_scale"], m["router_coef"], m["router_intercept"]) >= 0.5
+        return float(m["threshold_phone"] if phone else m["threshold_closeup"])
+
     def __call__(self, dinov2_emb):
-        x = (np.asarray(dinov2_emb, dtype=np.float64) - self.m["mean"]) / self.m["scale"]
-        p = float(1 / (1 + np.exp(-(x @ self.m["coef"] + self.m["intercept"]))))
-        return p >= float(self.m["threshold"]), p
+        m = self.m
+        p = _logistic(dinov2_emb, m["mean"], m["scale"], m["coef"], m["intercept"])
+        return p >= self.threshold(dinov2_emb), p
 
 
 def main():

@@ -209,3 +209,30 @@ def test_external_features_refuse_locked_set_without_descriptive_reason(monkeypa
     with pytest.raises(SystemExit, match="locked"):
         ee.main(argparse.Namespace(source="ddi", descriptive=None))
     assert not logged                                                 # a refused read is not logged as a look
+
+
+def test_validated_feature_replaces_failed_one_as_cited_reason():
+    import pandas as pd
+    from treeshap_top3 import representative
+    status = {"C_redness_vs_skin": "failed", "C_monet_vessels": "validated", "C_darkness_vs_skin": "partial"}
+    contrib = pd.Series({"C_redness_vs_skin": 0.6, "C_monet_vessels": 0.2, "C_darkness_vs_skin": 0.1})
+    assert representative(contrib) == "C_redness_vs_skin"                 # no status: largest, as before
+    assert representative(contrib, status) == "C_monet_vessels"           # failed top -> validated member
+    contrib["C_monet_vessels"] = -0.2                                     # validated but pushing the other way
+    assert representative(contrib, status) == "C_redness_vs_skin"
+    partial_top = pd.Series({"C_darkness_vs_skin": 0.6, "C_monet_vessels": 0.2})
+    assert representative(partial_top, status) == "C_darkness_vs_skin"    # partial features are kept
+
+
+def test_feature_table_v11_adds_monet_concepts_into_groups():
+    import pandas as pd
+    import add_monet
+    table = pd.DataFrame({"isic_id": ["a", "b"], "C_frac_red": [0.1, 0.2], "feature_version": "v1.0"})
+    monet = pd.DataFrame({"isic_id": ["b", "a"], "M_dark_pigment": [1.0, 2.0], "M_vessels": [3.0, 4.0],
+                          "M_ulceration_crust": [5.0, 6.0], "M_pigmented": [7.0, 8.0]})
+    out = add_monet.add_monet(table, monet).set_index("isic_id")
+    assert out.loc["a", "C_monet_dark_pigment"] == 2.0 and out.loc["b", "T_monet_ulceration_crust"] == 5.0
+    assert "M_pigmented" not in out and "C_monet_pigmented" not in out   # failed on Derm7pt: not added
+    assert set(out.feature_version) == {"v1.1"}
+    with pytest.raises(AssertionError):
+        add_monet.add_monet(table, monet[monet.isic_id == "a"])            # a missing score is an error

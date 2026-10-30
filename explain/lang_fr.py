@@ -49,6 +49,9 @@ PHRASES_FR = {
     "S_solidity": ("forme (compacité)", "compacte", "lobulée"),
     "S_extent": ("forme (remplissage du cadre englobant)", "compacte", "étalée"),
     "S_axis_ratio": ("forme (rapport des axes)", "ronde", "allongée"),
+    "C_monet_dark_pigment": ("quantité de pigment noir ou brun foncé", "élevée", "faible"),
+    "C_monet_vessels": ("visibilité des vaisseaux sanguins", "élevée", "faible"),
+    "T_monet_ulceration_crust": ("quantité d'ulcération ou de croûte", "élevée", "faible"),
 }
 UNMAPPED_SHAPE = "motif de forme sans nom clinique"
 TYPICAL, UNUSUAL = "typique", "inhabituel"

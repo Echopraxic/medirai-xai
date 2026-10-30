@@ -21,6 +21,9 @@
 #   sprint part 2 (prereg 2026-10-23; 5 seeds, kdv6_mel recipe): ARM=kdv7_mel (S2: + Mendeley light/dark pairs as
 #       training data, split v7) | kdv6_mel_cons (S4: split v6 + tone-consistency loss on the pairs); both also write
 #       tta_scores.npz (needs splits/f17k_dsd_v1.csv from slurm/narval_sprint2_data.sh)
+#   sprint part 3 (prereg 2026-10-30; kdv6_mel recipe, all write tta_scores.npz; needs slurm/narval_sprint3_data.sh):
+#       ARM=kdv8f_mel (F1: + F17k-C FST I-IV) | kdv8s_mel (D1: + SD-198) | kdv8f_lc K=0..2 N=1..2 (learning curve:
+#       v8f + N other folds of DSD v2, fold K held out)
 #   ARM=score RUN=<run folder under uncertaintyNet-main/output>   selection score of an existing run only
 #   ARM=tta RUN=<run folder>   8-view TTA scores incl. the darker-skin dev set (eval/tta_scores.py) of an existing run
 #
@@ -82,7 +85,9 @@ case "$ARM" in
     python classifier/train_multiclass.py --dataset-path "$DATA" --out "uncertaintyNet-main/output/$TAG/run" \
       --seed "$SEED" --lr "$LR" --epochs "$EPOCHS" --workers 8 --split_file isic_v4_clinical_plus_midas.csv
     score "$TAG/run" ;;
-  kd|kd_v4|kdv4_mel|kdv6|kdv6_mel|kdv7_mel|kdv6_mel_cons)
+  kdv8f_lc)
+    TAG=narval_stageb_kdv8f_lc_k${K:?set K}_n${N:?set N}_s${SEED}_$(date +%Y%m%d) ;&
+  kd|kd_v4|kdv4_mel|kdv6|kdv6_mel|kdv7_mel|kdv6_mel_cons|kdv8f_mel|kdv8s_mel|kdv8f_lc)
     T=narval_stageb
     TEACHERS=rorqual_v2_lr3e-4_20261014/resnet50_det/run,narval_v2_seed1_lr3e-4_20261018/resnet50_det/run,${T}_ref_s2_20261021/resnet50_det/run
     for a in hyg distill photo; do for s in 0 1 2; do TEACHERS=$TEACHERS,${T}_${a}_s${s}_20261021/run; done; done
@@ -95,11 +100,14 @@ case "$ARM" in
       kdv7_mel) A=(--split_file isic_v7_v6_plus_mendeley.csv --mel_head 0.5) ;;
       kdv6_mel_cons) A=(--split_file isic_v6_v4_plus_melanoma.csv --mel_head 0.5 --consistency 1.0
                         --pairs_csv mendeley_pairs_v1.csv) ;;
+      kdv8f_mel) A=(--split_file isic_v8f_v6_plus_f17k.csv --mel_head 0.5) ;;
+      kdv8s_mel) A=(--split_file isic_v8s_v6_plus_sd198.csv --mel_head 0.5) ;;
+      kdv8f_lc)  A=(--split_file "isic_v8f_lc_k${K}_n${N}.csv" --mel_head 0.5) ;;
     esac
     cd "$REPO"
     python classifier/train_sprint.py --dataset-path "$DATA" --out "uncertaintyNet-main/output/$TAG/run"       --lr "$LR" --epochs "$EPOCHS" --optimizer adamw --label_smoothing 0.1 --ema 0.999 --offline --workers 8       --seed "$SEED" --teacher_runs "$TEACHERS" --kd_alpha 0.7 --kd_T 2 "${A[@]}"
     score "$TAG/run"
-    case "$ARM" in kdv7_mel|kdv6_mel_cons) tta "$TAG/run" ;; esac ;;
+    case "$ARM" in kdv7_mel|kdv6_mel_cons|kdv8f_mel|kdv8s_mel|kdv8f_lc) tta "$TAG/run" ;; esac ;;
   hyg|hyg384|distill|distill_v4|photo|dinov2)
     HYG=(--optimizer adamw --label_smoothing 0.1 --ema 0.999 --offline --workers 8 --seed "$SEED")
     case "$ARM" in

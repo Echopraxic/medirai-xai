@@ -27,10 +27,13 @@ sys.path.insert(0, str(ROOT / "explain"))
 sys.path.insert(0, str(ROOT / "features"))
 sys.path.insert(0, str(ROOT / "trees"))
 import extract as fx  # noqa: E402
+from add_monet import MONET_FEATURES  # noqa: E402
 from template import PHRASES  # noqa: E402
 
 NOT_PHRASED = {"C_n_colors"}  # mirrors trees/treeshap_top3.NOT_PHRASED (importing it would pull in xgboost/shap)
-VERSION = "phrase_bank_v2"   # v2 (2026-10-23): adds the C2 validation on Derm7pt and SkinCon (concepts/c2_validation.py)
+# v2 (2026-10-23): adds the C2 validation on Derm7pt and SkinCon (concepts/c2_validation.py)
+# v3 (2026-10-30): adds the MONET concepts of feature table v1.1 (features/add_monet.py)
+VERSION = "phrase_bank_v3"
 
 # feature -> (intended clinical concept, ABCD / clinical relevance, [tests]); a test is
 # ("enhance", concept) | ("monet", "MONET_x~feature") | ("derm7pt", label)
@@ -62,6 +65,9 @@ INTENDED = {
     "C_yellowness_vs_skin": ("yellow crust / scale", "C", [("enhance", "color"), ("monet", "MONET_ulceration_crust~C_yellowness_vs_skin")]),
     "T_glcm_contrast": ("surface relief / scale", "surface", [("monet", "MONET_ulceration_crust~T_glcm_contrast"), ("derm7pt", "elevation")]),
     "T_roughness": ("surface roughness / scale", "surface", [("monet", "MONET_ulceration_crust~T_roughness"), ("derm7pt", "elevation")]),
+    "C_monet_dark_pigment": ("black / dark-brown pigment", "C", []),   # MONET: C2 rows only (c2_results)
+    "C_monet_vessels": ("vascular structures / telangiectasia", "vascular", []),
+    "T_monet_ulceration_crust": ("ulceration / crust", "surface", []),
 }
 RANK = {"validated": 4, "partial": 3, "failed": 2, "untestable": 1, "untested": 0}
 
@@ -102,10 +108,12 @@ def judge(test, feature, enh, monet, derm):
 
 
 def c2_results(feature, c2):
-    """Confirmatory Derm7pt / SkinCon rows for a handcrafted feature (prereg 2026-10-23); diagnosis-confounded pairs do not count."""
+    """Confirmatory Derm7pt / SkinCon rows for a handcrafted or MONET feature (prereg 2026-10-23); diagnosis-confounded
+    pairs do not count."""
+    candidate, kind = (MONET_FEATURES[feature][0], "MONET") if feature in MONET_FEATURES else (feature, "handcrafted")
     out = []
     for r in (c2 or {}).get("confirmatory", []):
-        if r.get("candidate") == feature and r.get("kind") == "handcrafted" and not r.get("diagnosis_confounded"):
+        if r.get("candidate") == candidate and r.get("kind") == kind and not r.get("diagnosis_confounded"):
             name = {"derm7pt": "Derm7pt expert", "skincon": "SkinCon dermatologist"}[r["dataset"]]
             out.append((r["status"], f"{name} '{r['concept'].replace('_', ' ')}' (clinical photos): AUROC {r['auroc']:.2f}"))
     return out
@@ -118,7 +126,10 @@ def build():
     vlm = latest_vlm()
     derm = vlm.get("our_features_vs_expert_auroc") if vlm else None
     rows = []
-    for fid, (group, units, meaning) in fx.FEATURE_DICTIONARY.items():
+    monet_dictionary = {fid: (fid[0], "MONET score (cosine contrast)", f"MONET image-text score for '{terms}' "
+                              f"(whole image, concept minus reference prompts)")
+                        for fid, (_, terms) in MONET_FEATURES.items()}
+    for fid, (group, units, meaning) in {**fx.FEATURE_DICTIONARY, **monet_dictionary}.items():
         measure, high, low = PHRASES.get(fid, (fid, "high", "low"))
         concept, relevance, tests = INTENDED.get(fid, (None, fx.CONCEPT_GROUPS.get(group, group), []))
         results = [r for r in (judge(t, fid, enh, monet, derm) for t in tests) if r] + c2_results(fid, c2)

@@ -530,6 +530,88 @@ def final_model_section():
     return chr(10).join(out[:2] + [chr(10).join([out[2]])] + out[3:]) if False else (chr(10) + chr(10)).join(out)
 
 
+def explanation_source_section():
+    """Surrogate on the final model, feature table v1.0 vs v1.1 (+ C2-validated MONET concepts; decision 2026-10-30)."""
+    pb = load("concepts/output/phrase_bank_v3.csv")
+    rows, rels = [], []
+    for v in ("v1.0", "v1.1"):
+        d = f"trees/output_{v}_kdv6_mel_s1"
+        rep = load(f"{d}/tree_report.json")
+        if not rep or pb is None or not (ROOT / d / "explanation_inputs.jsonl").exists():
+            continue
+        status = dict(zip(pb.feature_id, pb.status))
+        cases = [json.loads(line) for line in open(ROOT / d / "explanation_inputs.jsonl", encoding="utf-8")]
+        cases = [c for c in cases if c["split"] == "test"]
+        st = [[status.get(r["feature_id"], "untested") for r in c["llm_input"]["top_concepts"]] for c in cases]
+        flat = [s for case in st for s in case]
+        f = rep["fidelity"]["binary_surrogate"]
+        rows.append({"features": v, "agreement (benign / malignant)": f"{fmt(f['overall'], pct=True)} ({fmt(f['by_true_label']['0'], pct=True)} / "
+                     f"{fmt(f['by_true_label']['1'], pct=True)})", "surrogate AUROC": fmt(rep["test_performance"]["binary_surrogate"]["auroc"]),
+                     "validated reasons": fmt(flat.count("validated") / len(flat), pct=True),
+                     "validated or partial": fmt(sum(s in ("validated", "partial") for s in flat) / len(flat), pct=True),
+                     "failed": fmt(flat.count("failed") / len(flat), pct=True),
+                     "cases with a validated reason": fmt(sum("validated" in s for s in st) / len(st), pct=True)})
+        rels += [f"{d}/tree_report.json", f"{d}/explanation_inputs.jsonl"]
+    if not rows:
+        return "## Explanation source on the final model\n\nNot run yet."
+    return ("## Explanation source on the final model (kdv6_mel s1, split-v2 test)\n\n" + table(rows, list(rows[0]))
+            + "\n\nv1.1 = v1.0 + MONET dark pigment, vessels, ulceration/crust; validated features cited over failed ones "
+            "(phrase bank v3).\n\n" + src(*rels, "concepts/output/phrase_bank_v3.csv"))
+
+
+def darker_skin_section():
+    """SCIN tone-detector refit (eval/refit_detectors_scin.py) and the darkness-contrast test (eval/darkness_contrast_dsd.py)."""
+    out, rels = ["## Darker skin: scope detector and darkness shortcut"], []
+    r = load("eval/output/sprint2/refit_scin.json")
+    if r and "+scin/domain" in r["tone"]:
+        t = r["tone"]
+        rows = [{"detector": k, "SCIN-test dark sens": fmt(t[k]["by_set"].get("test/scin", {}).get("sens")),
+                 "v2 test flagged": fmt(t[k]["flagged_share"]["v2_test"]), "DSD V-VI flagged": fmt(t[k]["flagged_share"]["dsd_fst56"]),
+                 "SCIN light flagged": fmt(t[k]["flagged_share"]["scin_test_light"]),
+                 "MIDAS dev_test flagged": fmt(t[k]["flagged_share"]["midas_dev_test"]),
+                 "AUROC close-up / phone": f"{fmt(t[k]['by_set']['test/close-up']['auroc'])} / {fmt(t[k]['by_set']['test/phone']['auroc'])}",
+                 "adopted": {"base": "—"}.get(k, "yes" if t.get(f"adoption {k}", {}).get("adopt") else "no")}
+                for k in ("base", "+scin", "+scin/domain")]
+        out.append(table(rows, list(rows[0])))
+        rels.append("eval/output/sprint2/refit_scin.json")
+    dc = load("eval/output/darkness_contrast/dsd.json")
+    if dc:
+        h1, h2 = dc["H1_feature_by_fst"], dc["H2_shap_missed_vs_caught"]
+        out.append("Darkness vs skin on the dev set (FST V-VI minus IV, median [95% CI]): benign "
+                   f"{h1['label 0']['diff_V-VI_minus_IV']:+.1f} [{h1['label 0']['ci95'][0]:.1f}, {h1['label 0']['ci95'][1]:.1f}], malignant "
+                   f"{h1['label 1']['diff_V-VI_minus_IV']:+.1f} [{h1['label 1']['ci95'][0]:.1f}, {h1['label 1']['ci95'][1]:.1f}]. "
+                   "SHAP of the feature (S1 v1.0 tree), missed minus caught cancers: "
+                   + ", ".join(f"FST {k} {v['shap_diff_missed_minus_caught']:+.2f} [{v['ci95'][0]:.2f}, {v['ci95'][1]:.2f}] "
+                               f"(sensitivity {v['sensitivity']:.2f}, {v['n_missed']} missed)" for k, v in h2.items()) + ".")
+        rels.append("eval/output/darkness_contrast/dsd.json")
+    if len(out) == 1:
+        return out[0] + "\n\nNot run yet."
+    return "\n\n".join(out + [src(*rels)])
+
+
+def checks_1030_section():
+    """MIDAS calibrated size check (eval/midas_diameter_check.py) and precision of NLI-only flags (Claude labels)."""
+    out, rels = ["## Size proxy and NLI-flag precision (2026-10-30)"], []
+    m = load("eval/output/midas_diameter/check.json")
+    if m:
+        out.append("MIDAS phone photos at fixed distance, frame-relative mask Feret vs measured length (Spearman [95% CI]; "
+                   "CV median % error vs always-median): " + "; ".join(
+                       f"{k} {v['spearman_feret_vs_length']:+.2f} [{v['ci95'][0]:+.2f}, {v['ci95'][1]:+.2f}], "
+                       f"{fmt(v['cv_median_abs_pct_error_length'], pct=True)} vs {fmt(v['baseline_median_abs_pct_error'], pct=True)} (n {v['n']})"
+                       for k, v in m.items() if isinstance(v, dict)) + ".")
+        rels.append("eval/output/midas_diameter/check.json")
+    n = load("explain/output/nli_only_flags_precision_2026-10-30.json")
+    if n:
+        rows = [{"generator": k, "labelled": v["n_labelled"], "unfaithful": f"{fmt(v['precision_unfaithful'], pct=True)} "
+                 f"[{fmt(v['ci95'][0], pct=True)}, {fmt(v['ci95'][1], pct=True)}]", "omits direction": v["omits_direction"],
+                 "any defect": fmt(v["precision_any_defect"], pct=True)} for k, v in n.items() if isinstance(v, dict)]
+        out.append("Claims flagged only by NLI (rules pass), labelled by Claude (not human):\n\n" + table(rows, list(rows[0])))
+        rels.append("explain/output/nli_only_flags_precision_2026-10-30.json")
+    if len(out) == 1:
+        return out[0] + "\n\nNot run yet."
+    return "\n\n".join(out + [src(*rels)])
+
+
 def main(opts):
     try:
         commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True,
@@ -545,6 +627,7 @@ def main(opts):
         criteria_section(runs), baseline_section(), masks_section(), trees_section(), concepts_section(),
         llm_section(runs), c6_gradcam_section(), new_checks_section(), d5_section(), judge_section(),
         model_comparison_section(), external_section(), sprint_section(), final_model_section(), interpretability_section(),
+        explanation_source_section(), darker_skin_section(), checks_1030_section(),
     ]
     out = Path(opts.out)
     out.write_text("\n\n".join(parts) + "\n", encoding="utf-8", newline="\n")

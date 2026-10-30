@@ -34,10 +34,23 @@ GROUP_NAMES = {"A": "asymmetry", "B": "border", "C": "color", "D": "diameter", "
 NOT_PHRASED = {"C_n_colors"}
 
 
-def representative(contrib: pd.Series) -> str:
-    """Feature cited for a group: the largest contribution in the group's direction, skipping NOT_PHRASED."""
+WEAK_STATUS = {"failed", "untested", "untestable"}
+
+
+def representative(contrib: pd.Series, status=None) -> str:
+    """Feature cited for a group: the largest contribution in the group's direction, skipping NOT_PHRASED.
+
+    With status (feature -> phrase-bank status; decision 2026-10-30, C1): if that feature failed validation or was
+    never tested and a validated feature in the group also contributes in the group's direction, the largest
+    validated one is cited instead. Partial features are kept."""
     phrased = contrib.drop(list(NOT_PHRASED), errors="ignore")
-    return (phrased if len(phrased) else contrib).idxmax()
+    pool = phrased if len(phrased) else contrib
+    top = pool.idxmax()
+    if status and status.get(top, "untested") in WEAK_STATUS:
+        valid = pool[[f for f in pool.index if status.get(f) == "validated"]]
+        if (valid > 0).any():
+            return valid.idxmax()
+    return top
 
 
 def grouped(shap_df, feats):
@@ -55,12 +68,15 @@ def benign_percentile(ref_sorted, value):
     return float(np.searchsorted(ref_sorted, value) / max(len(ref_sorted), 1) * 100)
 
 
-def case_reasons(group_row, signed_row, values, feats, ref, thresholds, not_cited=frozenset(), not_encoded=None):
+def case_reasons(group_row, signed_row, values, feats, ref, thresholds, not_cited=frozenset(), not_encoded=None,
+                 status=None):
     """Top-3 concept groups of one case -> reason dicts. group_row: grouped signed SHAP (index = group letters);
     signed_row: per-feature SHAP toward the predicted class; values: feature values; ref: sorted benign train values.
     not_cited (faithfulness filter): features never cited as a reason; a group with no citable member is skipped and
     the next group takes its slot (its SHAP still counts in every group total). not_encoded (labelling): when given, each
-    reason gets model_encoded = False if the explained ResNet does not represent the cited feature."""
+    reason gets model_encoded = False if the explained ResNet does not represent the cited feature. status: phrase-bank
+    status per feature (see representative); a reason whose cited feature replaced the group's largest one records
+    that feature as largest_feature_id."""
     reasons = []
     for grp in group_row.abs().sort_values(ascending=False, kind="stable").index:
         if len(reasons) == 3:
@@ -69,12 +85,15 @@ def case_reasons(group_row, signed_row, values, feats, ref, thresholds, not_cite
         members = [f for f in feats if f[0] == grp and f not in not_cited]
         if not members:
             continue
-        fid = representative(signed_row[members] * np.sign(gval))
+        contrib = signed_row[members] * np.sign(gval)
+        fid = representative(contrib, status)
         value = float(values[fid])
         reasons.append({"concept": GROUP_NAMES[grp], "group": grp, "feature_id": fid,
                         "direction": "supports" if gval > 0 else "argues_against",
                         "strength": strength_bucket(gval, thresholds), "grouped_shap": round(float(gval), 4),
                         "feature_value": round(value, 4), "benign_percentile": round(benign_percentile(ref[fid], value), 1)})
+        if status and fid != (largest := representative(contrib)):
+            reasons[-1]["largest_feature_id"] = largest
         if not_encoded is not None:
             reasons[-1]["model_encoded"] = fid not in not_encoded
     return reasons
@@ -90,6 +109,8 @@ def main(opts):
     not_cited = frozenset(json.loads(Path(opts.not_cited).read_text())["features"]) if opts.not_cited else frozenset()
     not_encoded = (frozenset(json.loads(Path(opts.label_not_encoded).read_text())["features"])
                    if opts.label_not_encoded else None)
+    status = (dict(pd.read_csv(opts.phrase_bank)[["feature_id", "status"]].itertuples(index=False))
+              if opts.phrase_bank else None)
     table = pd.read_parquet(opts.features)
     tp = pd.read_csv(trees / "tree_predictions.csv")
     df = tp.merge(table[["isic_id"] + feats], on="isic_id")
@@ -136,7 +157,7 @@ def main(opts):
 
     lines = []
     for i, r in df[df.split.isin(["val", "test"])].iterrows():
-        reasons = case_reasons(g.loc[i], signed.loc[i], df.loc[i], feats, ref, (t1, t2), not_cited, not_encoded)
+        reasons = case_reasons(g.loc[i], signed.loc[i], df.loc[i], feats, ref, (t1, t2), not_cited, not_encoded, status)
         # ungrouped top-3 features (raw SHAP toward the prediction): input for the F-raw encoding (explain/encodings.py)
         top_feats = signed.loc[i, feats].abs().nlargest(3).index
         raw_top = [{"feature_id": f, "group": f[0], "shap": round(float(signed.loc[i, f]), 4),
@@ -180,4 +201,7 @@ if __name__ == "__main__":
     ap.add_argument("--label_not_encoded", default="",
                     help="labelling (pipeline default since 2026-10-21): not_cited.json; reasons get model_encoded")
     ap.add_argument("--suffix", default="", help="output suffix, e.g. _filtered (explanation_inputs<suffix>.jsonl)")
+    ap.add_argument("--phrase_bank", default="",
+                    help="phrase bank csv (feature_id, status): cite a validated feature over a failed/untested one "
+                         "in the same group (C1 decision 2026-10-30)")
     main(ap.parse_args())
