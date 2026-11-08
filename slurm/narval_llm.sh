@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO=${REPO:-$HOME/medirai-xai}
-TREES=${TREES:-trees/output_v1.1_kdv6_mel_s1}
+TREES=${TREES:-trees/output_v1.1_kdv8f_mel_s3}
 MODEL=${MODEL:-Qwen/Qwen2.5-7B-Instruct}
 PROMPTS=${PROMPTS:-"hybrid_v1 hybrid_fs_v1 hybrid_ng_v1"}
 export HF_HOME=${HF_HOME:-$SCRATCH/hf}

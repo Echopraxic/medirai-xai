@@ -74,6 +74,9 @@ python features/build_table.py --images uncertaintyNet-main/datasets_768/ISIC_cl
     --quality segmentation/output/qa_clinical/mask_quality.csv --out features/output/feature_table_v1.0.parquet
 python trees/train_trees.py --features features/output/feature_table_v1.0.parquet --predictions <run_dir>/predictions.csv --out trees/output_v1.0
 python trees/treeshap_top3.py --features features/output/feature_table_v1.0.parquet --trees trees/output_v1.0
+# final model: features v1.1 + phrase bank v3; citation rule r1 (default: a failed feature is never cited) and its check
+python trees/treeshap_top3.py --features features/output/feature_table_v1.1.parquet --trees trees/output_v1.1_kdv8f_mel_s3     --phrase_bank concepts/output/phrase_bank_v3.csv
+python eval/citation_rule.py --trees trees/output_v1.1_kdv8f_mel_s3
 python trees/s1_binary_tree.py                     # S1's ground-truth binary tree on the same table
 
 # 4. explanations: template baseline locally; LLMs on a GPU (slurm/rorqual_llm.sh)

@@ -36,15 +36,29 @@ NOT_PHRASED = {"C_n_colors"}
 
 WEAK_STATUS = {"failed", "untested", "untestable"}
 
+# Citation tiers (plan 2026-11-04, C2 rule R1 / variant R2): the best non-empty tier in the group's direction is cited;
+# a status in no tier is never cited (a group with nothing citable is skipped).
+CITE_TIERS = {"r1": [{"validated"}, {"partial"}, {"untested", "untestable"}],
+              "r2": [{"validated"}, {"partial"}]}
 
-def representative(contrib: pd.Series, status=None) -> str:
+
+def representative(contrib: pd.Series, status=None, rule="v1"):
     """Feature cited for a group: the largest contribution in the group's direction, skipping NOT_PHRASED.
 
     With status (feature -> phrase-bank status; decision 2026-10-30, C1): if that feature failed validation or was
     never tested and a validated feature in the group also contributes in the group's direction, the largest
-    validated one is cited instead. Partial features are kept."""
+    validated one is cited instead. Partial features are kept.
+    rule "r1"/"r2" (C2, 2026-11-04): tiered choice (CITE_TIERS) among features contributing in the group's direction;
+    returns None when no feature in an allowed tier does."""
     phrased = contrib.drop(list(NOT_PHRASED), errors="ignore")
     pool = phrased if len(phrased) else contrib
+    if status and rule in CITE_TIERS:
+        pos = pool[pool > 0]
+        for tier in CITE_TIERS[rule]:
+            cand = pos[[f for f in pos.index if status.get(f, "untested") in tier]]
+            if len(cand):
+                return cand.idxmax()
+        return None
     top = pool.idxmax()
     if status and status.get(top, "untested") in WEAK_STATUS:
         valid = pool[[f for f in pool.index if status.get(f) == "validated"]]
@@ -69,14 +83,15 @@ def benign_percentile(ref_sorted, value):
 
 
 def case_reasons(group_row, signed_row, values, feats, ref, thresholds, not_cited=frozenset(), not_encoded=None,
-                 status=None):
+                 status=None, rule="v1"):
     """Top-3 concept groups of one case -> reason dicts. group_row: grouped signed SHAP (index = group letters);
     signed_row: per-feature SHAP toward the predicted class; values: feature values; ref: sorted benign train values.
     not_cited (faithfulness filter): features never cited as a reason; a group with no citable member is skipped and
     the next group takes its slot (its SHAP still counts in every group total). not_encoded (labelling): when given, each
     reason gets model_encoded = False if the explained ResNet does not represent the cited feature. status: phrase-bank
     status per feature (see representative); a reason whose cited feature replaced the group's largest one records
-    that feature as largest_feature_id."""
+    that feature as largest_feature_id. rule: citation rule (see representative); under r1/r2 a group whose
+    representative is None is skipped like a group with no citable member."""
     reasons = []
     for grp in group_row.abs().sort_values(ascending=False, kind="stable").index:
         if len(reasons) == 3:
@@ -86,7 +101,9 @@ def case_reasons(group_row, signed_row, values, feats, ref, thresholds, not_cite
         if not members:
             continue
         contrib = signed_row[members] * np.sign(gval)
-        fid = representative(contrib, status)
+        fid = representative(contrib, status, rule)
+        if fid is None:
+            continue
         value = float(values[fid])
         reasons.append({"concept": GROUP_NAMES[grp], "group": grp, "feature_id": fid,
                         "direction": "supports" if gval > 0 else "argues_against",
@@ -157,7 +174,8 @@ def main(opts):
 
     lines = []
     for i, r in df[df.split.isin(["val", "test"])].iterrows():
-        reasons = case_reasons(g.loc[i], signed.loc[i], df.loc[i], feats, ref, (t1, t2), not_cited, not_encoded, status)
+        reasons = case_reasons(g.loc[i], signed.loc[i], df.loc[i], feats, ref, (t1, t2), not_cited, not_encoded, status,
+                               opts.cite_rule)
         # ungrouped top-3 features (raw SHAP toward the prediction): input for the F-raw encoding (explain/encodings.py)
         top_feats = signed.loc[i, feats].abs().nlargest(3).index
         raw_top = [{"feature_id": f, "group": f[0], "shap": round(float(signed.loc[i, f]), 4),
@@ -201,6 +219,9 @@ if __name__ == "__main__":
     ap.add_argument("--label_not_encoded", default="",
                     help="labelling (pipeline default since 2026-10-21): not_cited.json; reasons get model_encoded")
     ap.add_argument("--suffix", default="", help="output suffix, e.g. _filtered (explanation_inputs<suffix>.jsonl)")
+    ap.add_argument("--cite_rule", default="r1", choices=["v1", "r1", "r2"],
+                    help="with --phrase_bank: r1 = tiered, failed never cited (adopted 2026-11-04, C2); v1 = validated over "
+                         "failed/untested only (2026-10-30); r2 = validated or partial only (reported)")
     ap.add_argument("--phrase_bank", default="",
                     help="phrase bank csv (feature_id, status): cite a validated feature over a failed/untested one "
                          "in the same group (C1 decision 2026-10-30)")

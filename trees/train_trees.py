@@ -15,6 +15,7 @@ per true class, per ResNet class, per source, per mask quality, and on the cases
 import argparse
 import itertools
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -85,8 +86,15 @@ def main(opts):
               "n_test": int((df.split == "test").sum()), "train_excludes": "mask_quality == fail or extraction error"}
 
     models = {}
+    extra = None
+    if opts.extra_rows:        # plan 2026-11-05: +E arm (surrogate only; images the ResNet never trained on)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from eval.surrogate_c1b import extra_rows
+        extra = extra_rows(feats)
+        report["surrogate_extra_rows"] = {"n": len(extra), "melanoma": int((extra.ova_class == "Melanoma").sum())}
     for name, target in (("binary_gt", "label"), ("binary_surrogate", "resnet_pred")):
-        m, params, val_auc = fit_tuned(tr[feats], tr[target], va[feats], va[target])
+        fit = pd.concat([tr, extra]) if (extra is not None and name == "binary_surrogate") else tr
+        m, params, val_auc = fit_tuned(fit[feats], fit[target].astype(int), va[feats], va[target])
         models[name] = m
         report[name] = {"params": params, "val_auc_vs_target": val_auc}
         m.save_model(out / f"{name}.json")
@@ -160,4 +168,7 @@ if __name__ == "__main__":
     ap.add_argument("--features", required=True)
     ap.add_argument("--predictions", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--extra_rows", action="store_true",
+                    help="add the SD-198 + Mendeley melanoma rows (features/output/external/surrogate_extra_*) to the "
+                         "binary surrogate's training only")
     main(ap.parse_args())

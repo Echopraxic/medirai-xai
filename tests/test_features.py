@@ -224,6 +224,27 @@ def test_validated_feature_replaces_failed_one_as_cited_reason():
     assert representative(partial_top, status) == "C_darkness_vs_skin"    # partial features are kept
 
 
+def test_tiered_citation_rule_never_cites_failed_features():
+    import pandas as pd
+    sys.path.insert(0, str(ROOT / "trees"))
+    from treeshap_top3 import case_reasons, representative
+    status = {"T_lbp_entropy": "failed", "T_roughness": "partial", "T_glcm_energy": "untested", "T_monet_x": "validated"}
+    c = pd.Series({"T_lbp_entropy": 0.9, "T_glcm_energy": 0.3, "T_roughness": 0.1, "T_monet_x": -0.2})
+    assert representative(c, status) == "T_lbp_entropy"               # v1: no validated member pushes this way
+    assert representative(c, status, "r1") == "T_roughness"           # partial tier beats untested and failed
+    assert representative(c.drop("T_roughness"), status, "r1") == "T_glcm_energy"
+    assert representative(c.drop("T_roughness"), status, "r2") is None  # r2 cites only validated or partial
+    assert representative(pd.Series({"T_lbp_entropy": 0.5}), status, "r1") is None
+    # a group with nothing citable is skipped and the next group takes the slot
+    feats = ["T_lbp_entropy", "C_frac_black", "A_x", "S_y"]
+    groups = pd.Series({"T": 0.9, "C": 0.5, "A": 0.3, "S": 0.1})
+    signed = pd.Series({"T_lbp_entropy": 0.9, "C_frac_black": 0.5, "A_x": 0.3, "S_y": 0.1})
+    ref = {f: np.array([0.0, 1.0]) for f in feats}
+    st = {"T_lbp_entropy": "failed", "C_frac_black": "validated", "A_x": "partial", "S_y": "untested"}
+    got = case_reasons(groups, signed, signed, feats, ref, (0.2, 0.6), status=st, rule="r1")
+    assert [r["group"] for r in got] == ["C", "A", "S"]
+
+
 def test_feature_table_v11_adds_monet_concepts_into_groups():
     import pandas as pd
     import add_monet

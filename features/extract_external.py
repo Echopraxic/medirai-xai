@@ -40,6 +40,17 @@ def build_dsd():
                          "fitzpatrick": d.fitzpatrick, "dsd": d.dsd})
 
 
+def build_surrogate_extra():
+    """C1 arm E (plan 2026-11-04): SD-198 + Mendeley melanoma images the final model never trained on (training rows
+    for the surrogate only; selection data, not a locked set)."""
+    d = pd.read_csv(ROOT / "splits/surrogate_extra_v1.csv")
+    return pd.DataFrame({"image_id": d.isic_id, "path": [str(ROOT / "data/surrogate_extra/files_768" / f"{i}.jpg") for i in d.isic_id],
+                         "label": d.label.astype(int), "group": d.group_id, "diagnosis": d.diagnosis_3})
+
+
+BUILDERS = {"dsd": build_dsd, "surrogate_extra": build_surrogate_extra}
+
+
 def log_descriptive(source, reason):
     row = pd.DataFrame([{"time": datetime.datetime.now().isoformat(timespec="seconds"), "source": source,
                          "runs": "features v1.0 (descriptive, no model scored)", "reason": f"DESCRIPTIVE: {reason}"}])
@@ -51,7 +62,7 @@ def main(opts):
         if not opts.descriptive:
             raise SystemExit(f"{opts.source} is locked: pass --descriptive '<reason>' (logged to looks.csv)")
         log_descriptive(opts.source, opts.descriptive)
-    df = (build_dsd() if opts.source == "dsd" else SOURCES[opts.source]()).reset_index(drop=True)
+    df = (BUILDERS[opts.source]() if opts.source in BUILDERS else SOURCES[opts.source]()).reset_index(drop=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt = torch.load(CKPT, map_location=device)
     net = ResNetUNet(pretrained=False).to(device).eval()
@@ -80,6 +91,6 @@ def main(opts):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--source", required=True, choices=["dsd", *sorted(SOURCES)])
+    ap.add_argument("--source", required=True, choices=[*BUILDERS, *sorted(SOURCES)])
     ap.add_argument("--descriptive", help="reason, required for a locked source (logged to looks.csv)")
     main(ap.parse_args())

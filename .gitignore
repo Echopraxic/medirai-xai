@@ -60,3 +60,6 @@ Notes_for_Michael_*.md
 S1-9_OUTLINE.md
 SCIN_DETECTOR_PLAN.md
 DERMATOLOGIST_QUESTIONS*.md
+# PASSION (MICCAI 2024): no re-upload permitted; images local only (plan 2026-11-04). Rebuild with interpret/passion_labels.py
+splits/passion_v1.csv
+classifier/output/embeddings/*passion*

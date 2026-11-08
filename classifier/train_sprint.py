@@ -256,7 +256,9 @@ def main(opts):
     amp = device.type == "cuda"
     data_dir = str(Path(opts.dataset_path) / "ISIC_clinical")
     df = dataset.load_split(str(ROOT / "splits" / opts.split_file), data_dir)
-    parts = {s: df[df.split == s].reset_index(drop=True) for s in ["train", "val", "test"]}
+    # "oof" rows (splits/make_oof_v8f.py) are never trained on but are predicted at the end (C1 out-of-fold targets)
+    names = ["train", "val", "test"] + (["oof"] if (df.split == "oof").any() else [])
+    parts = {s: df[df.split == s].reset_index(drop=True) for s in names}
     if opts.limit:
         parts = {s: d.groupby("label", group_keys=False).head(opts.limit // 2).reset_index(drop=True)
                  for s, d in parts.items()}
@@ -347,7 +349,7 @@ def main(opts):
     state = torch.load(out / "checkpoint_best_val.pth.tar", map_location=device, weights_only=False)
     final.load_state_dict(state["network_state_dict"])
     frames, embs, emb_ids = [], [], []
-    for s in ["train", "val", "test"]:
+    for s in parts:
         p, f, ids, y = predict(final, eval_dl[s], device, amp)
         p_mel = predict.last_mel
         pc = p.clip(1e-7, 1 - 1e-7)
