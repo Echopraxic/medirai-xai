@@ -19,6 +19,11 @@ Options (each batch-2 arm changes one thing against the hygiene recipe):
                         arm S4 (prereg 2026-10-23): light/dark image pairs (columns orig_id, synth_id; e.g. the Mendeley
                         I2SB pairs) seen with the same augmentation; loss += W * symmetric KL between the two softmax
                         outputs. Pairs carry no label or KD loss; they share the main batch's forward pass (BatchNorm)
+  --lesion_contrast P --contrast_masks DIR [--contrast_range 0.6,1.5]
+                        darkness-contrast arm (prereg draft 2026-11-06): with probability P the lesion (clinical UNet
+                        mask, feathered) is darkened or lightened against the skin by a log-uniform factor, whatever
+                        the label, so "darker than the skin" stops predicting benign. Images without a usable mask are
+                        left as they are; the share with one is printed and saved as contrast_mask_coverage
 Checkpoint = best val AUROC (val = the split's val rows: split v2 val, or v2 val + MIDAS dev_val for split v4).
 Writes the same files as uncertaintyNet runs (checkpoint_best_val.pth.tar, config.json, log.csv, predictions.csv,
 embeddings.npz), so eval/selection_score.py, trees/, eval/gradcam_arm.py and interpret/ read it unchanged.
@@ -77,6 +82,42 @@ class MelaninDarken:
             return x
         a = random.uniform(0.45, 0.85)
         return (x * torch.tensor([a, a * 0.9, a * 0.8]).view(3, 1, 1)).clamp(0, 1)
+
+
+class LesionContrast:
+    """Scale the lesion's RGB by a factor f against unchanged skin, on the PIL image before the other augmentations.
+    f is log-uniform in [lo, hi] (f < 1 darker, f > 1 lighter) and drawn independently of the label, so the lesion's
+    darkness relative to the skin carries no label information in augmented images. The mask (0/255 PNG, same name as
+    the image) is feathered by a Gaussian blur so no hard edge is painted in. Masks covering under min_area or over
+    max_area of the image (failed or wide-shot masks) are not used."""
+    def __init__(self, mask_dir, p=0.5, lo=0.6, hi=1.5, min_area=0.005, max_area=0.6, feather=0.01):
+        self.mask_dir, self.p, self.lo, self.hi = Path(mask_dir), p, lo, hi
+        self.min_area, self.max_area, self.feather = min_area, max_area, feather
+
+    def __call__(self, im, isic_id):
+        path = self.mask_dir / f"{isic_id}.png"
+        if random.random() >= self.p or not path.exists():
+            return im
+        m = Image.open(path).convert("L")
+        if m.size != im.size:
+            m = m.resize(im.size, Image.NEAREST)
+        if not self.min_area <= (np.asarray(m) > 127).mean() <= self.max_area:
+            return im
+        a = np.asarray(m.filter(ImageFilter.GaussianBlur(self.feather * max(im.size))), dtype=np.float32)[..., None] / 255
+        f = float(np.exp(random.uniform(np.log(self.lo), np.log(self.hi))))
+        x = np.asarray(im, dtype=np.float32)
+        return Image.fromarray((x * (1 - a) + np.clip(x * f, 0, 255) * a).round().astype(np.uint8))
+
+
+class ContrastDataset(dataset.ISICDatasetV2):
+    """ISICDatasetV2 with LesionContrast applied to the loaded image before the transform."""
+    def __init__(self, dataframe, root_dir, transform, contrast):
+        super().__init__(dataframe, root_dir, transform)
+        self.contrast = contrast
+
+    def __getitem__(self, idx):
+        im = self.contrast(Image.open(self.image_paths[idx]).convert("RGB"), self.isic_ids[idx])
+        return self.transform(im), self.labels[idx], self.isic_ids[idx]
 
 
 class PairDataset(torch.utils.data.Dataset):
@@ -264,8 +305,17 @@ def main(opts):
     train_tf, test_tf = make_transforms(opts.input_size, stats, opts.photo_aug)
     g = torch.Generator().manual_seed(opts.seed)
     kw = dict(num_workers=opts.workers, pin_memory=amp, persistent_workers=opts.workers > 0)
-    train_dl = DataLoader(dataset.ISICDatasetV2(parts["train"], data_dir, train_tf), batch_size=opts.batch_size,
-                          shuffle=True, drop_last=True, generator=g, **kw)
+    train_ds = dataset.ISICDatasetV2(parts["train"], data_dir, train_tf)
+    if opts.lesion_contrast > 0:
+        lo, hi = (float(v) for v in opts.contrast_range.split(","))
+        train_ds = ContrastDataset(parts["train"], data_dir, train_tf,
+                                   LesionContrast(opts.contrast_masks, opts.lesion_contrast, lo, hi))
+        opts.contrast_mask_coverage = float(np.mean([(Path(opts.contrast_masks) / f"{i}.png").exists()
+                                                     for i in parts["train"].isic_id]))
+        print(f"lesion contrast: masks for {opts.contrast_mask_coverage:.1%} of train images", flush=True)
+        if opts.contrast_mask_coverage == 0:
+            raise SystemExit(f"--lesion_contrast: no masks in {opts.contrast_masks!r} for the train images")
+    train_dl = DataLoader(train_ds, batch_size=opts.batch_size, shuffle=True, drop_last=True, generator=g, **kw)
     eval_dl = {s: DataLoader(dataset.ISICDatasetV2(parts[s], data_dir, test_tf), batch_size=opts.batch_size, **kw)
                for s in parts}
     pair_iter = None
@@ -402,6 +452,10 @@ if __name__ == "__main__":
     ap.add_argument("--pairs_csv", default="mendeley_pairs_v1.csv", help="tone pairs under splits/ (orig_id, synth_id)")
     ap.add_argument("--consistency", type=float, default=0.0, help="weight of the tone-consistency loss (0 = off)")
     ap.add_argument("--pair_batch", type=int, default=32)
+    ap.add_argument("--lesion_contrast", type=float, default=0.0,
+                    help="probability of the lesion-vs-skin contrast augmentation (0 = off)")
+    ap.add_argument("--contrast_masks", default="", help="lesion masks <isic_id>.png (clinical UNet)")
+    ap.add_argument("--contrast_range", default="0.6,1.5", help="lesion RGB factor range lo,hi (log-uniform)")
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--batch_size", type=int, default=128)
     ap.add_argument("--workers", type=int, default=8)
