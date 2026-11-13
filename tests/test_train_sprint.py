@@ -92,3 +92,53 @@ def test_symmetric_kl_is_zero_for_equal_logits_and_symmetric():
     b = torch.tensor([[0.0, 1.0], [1.0, -2.0]])
     assert T.symmetric_kl(a, a).abs() < 1e-6
     assert torch.allclose(T.symmetric_kl(a, b), T.symmetric_kl(b, a)) and T.symmetric_kl(a, b) > 0
+
+
+def _lesion_image(tmp_path, isic_id="ISIC_1", size=64, box=(16, 48)):
+    """Grey skin (150) with a square lesion (60) and its mask."""
+    import numpy as np
+    from PIL import Image
+    x = np.full((size, size, 3), 150, np.uint8)
+    m = np.zeros((size, size), np.uint8)
+    x[box[0]:box[1], box[0]:box[1]] = 60
+    m[box[0]:box[1], box[0]:box[1]] = 255
+    Image.fromarray(m).save(tmp_path / f"{isic_id}.png")
+    return Image.fromarray(x)
+
+
+def test_lesion_contrast_changes_the_lesion_not_the_skin(tmp_path):
+    import numpy as np
+    import train_sprint as T
+    im = _lesion_image(tmp_path)
+    for lo_hi, direction in [((0.5, 0.5), -1), ((1.5, 1.5), 1)]:
+        out = np.asarray(T.LesionContrast(tmp_path, p=1.0, lo=lo_hi[0], hi=lo_hi[1])(im, "ISIC_1"), dtype=float)
+        assert np.sign(out[32, 32, 0] - 60) == direction          # lesion centre darker / lighter
+        assert out[0, 0, 0] == 150 and out[63, 63, 0] == 150      # skin far from the edge untouched
+
+
+def test_lesion_contrast_leaves_unusable_masks_alone(tmp_path):
+    import numpy as np
+    import train_sprint as T
+    im = _lesion_image(tmp_path, box=(0, 64))                     # mask covers the whole frame: a failed mask
+    aug = T.LesionContrast(tmp_path, p=1.0, lo=0.5, hi=0.5)
+    assert np.array_equal(np.asarray(aug(im, "ISIC_1")), np.asarray(im))
+    assert np.array_equal(np.asarray(aug(im, "no_mask")), np.asarray(im))
+    assert np.array_equal(np.asarray(T.LesionContrast(tmp_path, p=0.0)(im, "ISIC_1")), np.asarray(im))
+
+
+def test_lesion_contrast_factor_ignores_the_label(tmp_path):
+    """The factor is drawn the same way whatever the label: the augmentation must not create a new label shortcut."""
+    import inspect
+    import train_sprint as T
+    assert "label" not in inspect.signature(T.LesionContrast.__call__).parameters
+
+
+def test_contrast_dataset_returns_a_transformed_tensor(tmp_path):
+    import pandas as pd
+    import train_sprint as T
+    _lesion_image(tmp_path).save(tmp_path / "ISIC_1.jpg")
+    train_tf, _ = T.make_transforms(32, T.MEDIR_STATS)
+    ds = T.ContrastDataset(pd.DataFrame({"isic_id": ["ISIC_1"], "label": [1]}), str(tmp_path), train_tf,
+                           T.LesionContrast(tmp_path, p=1.0))
+    x, y, i = ds[0]
+    assert x.shape == (3, 32, 32) and int(y) == 1 and i == "ISIC_1"

@@ -60,8 +60,8 @@ def table(df, by):
 
 def main(opts):
     res = Path(opts.results).expanduser()
-    locked = json.loads((res / "eval/output/stage_c/locked_final/locked_final.json").read_text())
-    val_p = np.load(res / "eval/output/stage_c/final/scores.npz")["v2_val_prob"]
+    locked = json.loads((res / f"eval/output/stage_c/locked_final/{opts.name}.json").read_text())
+    val_p = np.load(res / opts.final_report / "scores.npz")["v2_val_prob"]
     threshold = float(np.quantile(entropy(val_p), 0.75))
 
     out = Path(opts.out)
@@ -71,7 +71,7 @@ def main(opts):
                          f"Decision threshold {locked['threshold']:.4f} (standard mode).", ""]
 
     for name in SETS:
-        df = pd.read_csv(res / f"eval/output/stage_c/locked_final/locked_final_{name}_predictions.csv")
+        df = pd.read_csv(res / f"eval/output/stage_c/locked_final/{opts.name}_{name}_predictions.csv")
         df["set"] = name
         df["deferred"] = df.entropy_of_expected > threshold
         expected = locked["sets"][name]["deferred share (internal val p75 entropy)"]
@@ -115,6 +115,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results", required=True, help="unzipped s1_results folder")
     ap.add_argument("--out", default="eval/output/s1_error_lists")
+    ap.add_argument("--name", default="locked_final",
+                    help="locked look's --out_name (kdv8f_mel s3: locked_final_kdv8f_mel_s3)")
+    ap.add_argument("--final_report", default="eval/output/stage_c/final",
+                    help="final_model_report.py --out, relative to --results (kdv8f_mel s3: eval/output/stage_c/final_kdv8f_mel_s3)")
     ap.add_argument("--min-n", type=int, default=10)
     ap.add_argument("--top", type=int, default=12)
     main(ap.parse_args())
