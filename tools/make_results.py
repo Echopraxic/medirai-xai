@@ -521,12 +521,21 @@ def interpretability_section():
 
 
 def final_model_section():
-    """Final model of the classifier sprint (eval/final_model_report.py, eval/final_locked_look.py)."""
-    rel_a, rel_b = "eval/output/stage_c/final/final_model_report.json", "eval/output/stage_c/locked_final/locked_final.json"
+    """Final model (kdv8f_mel s3, adopted 2026-11-04; locked look 2026-11-13) first, then the previous one (kdv6_mel s1)."""
+    parts = [_final_block("## Final model kdv8f_mel s3 (sprint part 3, adopted 2026-11-04)",
+                          "eval/output/stage_c/final_kdv8f_mel_s3/final_model_report.json",
+                          "eval/output/stage_c/locked_final/locked_final_kdv8f_mel_s3.json"),
+             _final_block("## Previous final model kdv6_mel s1 (classifier sprint, stage C)",
+                          "eval/output/stage_c/final/final_model_report.json",
+                          "eval/output/stage_c/locked_final/locked_final.json")]
+    return (chr(10) + chr(10)).join(p for p in parts if p)
+
+
+def _final_block(title, rel_a, rel_b):
     a, b = load(rel_a), load(rel_b)
     if not a:
-        return "## Final model (classifier sprint)" + chr(10) + chr(10) + "Not run yet."
-    out = ["## Final model (classifier sprint, stage C)",
+        return None
+    out = [title,
            f"Run `{a['run']}`; temperature {a['temperature']:.2f}, standard threshold {a['threshold_standard']:.3f}, "
            f"melanoma-head threshold {a['threshold_melanoma_head']:.3f} (all fit on validation data)."]
     rows = []
