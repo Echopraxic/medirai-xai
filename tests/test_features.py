@@ -198,3 +198,62 @@ def test_unvalidated_feature_is_never_the_cited_reason():
     contrib = pd.Series({"C_n_colors": 0.9, "C_color_entropy": 0.2, "C_frac_black": -0.1})
     assert representative(contrib) == "C_color_entropy"
     assert representative(pd.Series({"C_n_colors": 0.5})) == "C_n_colors"  # only member left: keep the group
+
+
+def test_external_features_refuse_locked_set_without_descriptive_reason(monkeypatch):
+    import argparse
+    sys.path.insert(0, str(ROOT / "features"))
+    import extract_external as ee
+    logged = []
+    monkeypatch.setattr(ee, "log_descriptive", lambda *a: logged.append(a))
+    with pytest.raises(SystemExit, match="locked"):
+        ee.main(argparse.Namespace(source="ddi", descriptive=None))
+    assert not logged                                                 # a refused read is not logged as a look
+
+
+def test_validated_feature_replaces_failed_one_as_cited_reason():
+    import pandas as pd
+    from treeshap_top3 import representative
+    status = {"C_redness_vs_skin": "failed", "C_monet_vessels": "validated", "C_darkness_vs_skin": "partial"}
+    contrib = pd.Series({"C_redness_vs_skin": 0.6, "C_monet_vessels": 0.2, "C_darkness_vs_skin": 0.1})
+    assert representative(contrib) == "C_redness_vs_skin"                 # no status: largest, as before
+    assert representative(contrib, status) == "C_monet_vessels"           # failed top -> validated member
+    contrib["C_monet_vessels"] = -0.2                                     # validated but pushing the other way
+    assert representative(contrib, status) == "C_redness_vs_skin"
+    partial_top = pd.Series({"C_darkness_vs_skin": 0.6, "C_monet_vessels": 0.2})
+    assert representative(partial_top, status) == "C_darkness_vs_skin"    # partial features are kept
+
+
+def test_tiered_citation_rule_never_cites_failed_features():
+    import pandas as pd
+    sys.path.insert(0, str(ROOT / "trees"))
+    from treeshap_top3 import case_reasons, representative
+    status = {"T_lbp_entropy": "failed", "T_roughness": "partial", "T_glcm_energy": "untested", "T_monet_x": "validated"}
+    c = pd.Series({"T_lbp_entropy": 0.9, "T_glcm_energy": 0.3, "T_roughness": 0.1, "T_monet_x": -0.2})
+    assert representative(c, status) == "T_lbp_entropy"               # v1: no validated member pushes this way
+    assert representative(c, status, "r1") == "T_roughness"           # partial tier beats untested and failed
+    assert representative(c.drop("T_roughness"), status, "r1") == "T_glcm_energy"
+    assert representative(c.drop("T_roughness"), status, "r2") is None  # r2 cites only validated or partial
+    assert representative(pd.Series({"T_lbp_entropy": 0.5}), status, "r1") is None
+    # a group with nothing citable is skipped and the next group takes the slot
+    feats = ["T_lbp_entropy", "C_frac_black", "A_x", "S_y"]
+    groups = pd.Series({"T": 0.9, "C": 0.5, "A": 0.3, "S": 0.1})
+    signed = pd.Series({"T_lbp_entropy": 0.9, "C_frac_black": 0.5, "A_x": 0.3, "S_y": 0.1})
+    ref = {f: np.array([0.0, 1.0]) for f in feats}
+    st = {"T_lbp_entropy": "failed", "C_frac_black": "validated", "A_x": "partial", "S_y": "untested"}
+    got = case_reasons(groups, signed, signed, feats, ref, (0.2, 0.6), status=st, rule="r1")
+    assert [r["group"] for r in got] == ["C", "A", "S"]
+
+
+def test_feature_table_v11_adds_monet_concepts_into_groups():
+    import pandas as pd
+    import add_monet
+    table = pd.DataFrame({"isic_id": ["a", "b"], "C_frac_red": [0.1, 0.2], "feature_version": "v1.0"})
+    monet = pd.DataFrame({"isic_id": ["b", "a"], "M_dark_pigment": [1.0, 2.0], "M_vessels": [3.0, 4.0],
+                          "M_ulceration_crust": [5.0, 6.0], "M_pigmented": [7.0, 8.0]})
+    out = add_monet.add_monet(table, monet).set_index("isic_id")
+    assert out.loc["a", "C_monet_dark_pigment"] == 2.0 and out.loc["b", "T_monet_ulceration_crust"] == 5.0
+    assert "M_pigmented" not in out and "C_monet_pigmented" not in out   # failed on Derm7pt: not added
+    assert set(out.feature_version) == {"v1.1"}
+    with pytest.raises(AssertionError):
+        add_monet.add_monet(table, monet[monet.isic_id == "a"])            # a missing score is an error

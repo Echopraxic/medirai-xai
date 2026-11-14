@@ -87,7 +87,8 @@ def test_efst_median_tie_and_agreement():
                                            ["YES", None, None, None]))}})
     e = scin.efst_labels(lab).set_index("case_id")
     assert e.loc[1, "efst"] == 5 and e.loc[1, "dark_agreed"] and e.loc[1, "n_efst_raters"] == 3
-    assert e.loc[2, "efst_tie"] and e.loc[2, "dark"] == 0          # 4 and 5 -> 4.5 counts as not dark
+    assert e.loc[2, "efst_tie"] and e.loc[2, "dark"] == 1          # 4 and 5 -> 4.5 counts as dark (safety warning)
+    assert not e.loc[2, "dark_agreed"]
     assert e.loc[3, "dark"] == 1 and not e.loc[3, "dark_agreed"]    # one rater only
     assert np.isnan(e.loc[4, "dark"])                               # ungradable
 
@@ -97,3 +98,28 @@ def test_case_groups_join_cases_that_share_an_image():
                           "image_2_path": [np.nan, "a.png", np.nan], "image_3_path": [np.nan] * 3})
     g = scin.case_groups(cases)
     assert g[0] == g[1] and g[2] != g[0]
+
+
+def test_near_duplicates_join_cases_across_groups():
+    emb = np.array([[1, 0, 0], [0.99, 0.1, 0], [0, 1, 0], [1, 0.01, 0]], dtype=np.float32)
+    image_case = {"a": [1], "b": [2], "c": [3], "d": [1]}            # d is another photo of case 1
+    dups = scin.near_duplicates(["a", "b", "c", "d"], emb, image_case)
+    assert len(dups) == 2                                            # a-b and b-d; a-d is the same case
+    assert all({a, b} == {1, 2} for a, b in zip(dups.case_a, dups.case_b))
+    assert "c" not in set(dups.image_a) | set(dups.image_b)
+    cases = pd.DataFrame({"case_id": [1, 2, 3], "image_1_path": ["a.png", "b.png", "c.png"],
+                          "image_2_path": ["d.png", np.nan, np.nan], "image_3_path": [np.nan] * 3})
+    g = scin.case_groups(cases, zip(dups.case_a, dups.case_b))
+    assert g[0] == g[1] and g[2] != g[0]
+
+
+def test_redacted_and_withdrawn_images_are_dropped():
+    rid, wid = next(iter(scin.REDACTED_IMAGES)), next(iter(scin.WITHDRAWN_IMAGES))
+    cases = pd.DataFrame({"case_id": [1], "image_1_path": [f"x/{rid}.png"], "image_1_shot_type": ["CLOSE_UP"],
+                          "image_2_path": ["x/7.png"], "image_2_shot_type": ["AT_DISTANCE"],
+                          "image_3_path": [f"x/{wid}.png"], "image_3_shot_type": ["AT_AN_ANGLE"]})
+    keep = ["case_id", "case_group", "split", "efst", "n_efst_raters", "efst_tie", "dark", "dark_agreed", "tone_group",
+            "sfst", "monk_us", "monk_india", "neoplasm_like"]
+    d = pd.DataFrame({k: [1 if k == "case_id" else 0] for k in keep})
+    img = scin.image_table(cases, d)
+    assert list(img.image_id) == ["7"]

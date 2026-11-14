@@ -75,11 +75,33 @@ def c1_met(f, target=0.85):
     return "overall yes, per class no" if f["overall"] >= target else "no"
 
 
+def c2_coverage(trees="trees/output_v1.1_kdv8f_mel_s3", bank="concepts/output/phrase_bank_v3.csv"):
+    """C2 on the final model: phrase-bank status of every cited reason (split-v2 test) and the concept count by status."""
+    pb = load(bank)
+    path = ROOT / trees / "explanation_inputs.jsonl"
+    if pb is None or not path.exists():
+        return None
+    status = dict(zip(pb.feature_id, pb.status))
+    cases = [json.loads(line) for line in open(path, encoding="utf-8")]
+    flat = [status.get(r["feature_id"], "untested") for c in cases if c["split"] == "test"
+            for r in c["llm_input"]["top_concepts"]]
+    n = {k: int((pb.status == k).sum()) for k in ("validated", "partial", "failed", "untestable", "untested")}
+    share = lambda *ks: sum(s in ks for s in flat) / len(flat)
+    return {"criterion": "C2 cited reasons (final model kdv8f_mel s3, features v1.1)", "target": "≥ a single rater per concept; failed never cited",
+            "value": f"validated {fmt(share('validated'), pct=True)}, partial {fmt(share('partial'), pct=True)}, "
+                     f"untested/untestable {fmt(share('untested', 'untestable'), pct=True)}, failed {fmt(share('failed'), pct=True)} "
+                     f"of {len(flat)} reasons; phrase bank: " + ", ".join(f"{v} {k}" for k, v in n.items()),
+            "met": f"{n['validated']} concepts validated; failed cited {'never' if share('failed') == 0 else fmt(share('failed'), pct=True)}"}
+
+
 def criteria_section(runs):
-    # C1 is measured against the explained model: the split-v2 det ResNet50 when its refit exists, else the v1 one
-    tree_rel = first("trees/output_v1.0_detv2/tree_report.json", "trees/output_v1.0/tree_report.json")
+    # C1 is measured against the explained model: the final model (kdv8f_mel s3, features v1.1) when its trees exist,
+    # else the split-v2 det ResNet50, else the v1 one
+    tree_rel = first("trees/output_v1.1_kdv8f_mel_s3/tree_report.json", "trees/output_v1.0_detv2/tree_report.json",
+                     "trees/output_v1.0/tree_report.json")
     tree = load(tree_rel) if tree_rel else None
-    explained = "split-v2 det ResNet50" if tree_rel and "detv2" in tree_rel else "split-v1 ResNet50 (stale)"
+    explained = ("final model kdv8f_mel s3, features v1.1" if tree_rel and "kdv8f" in tree_rel
+                 else "split-v2 det ResNet50" if tree_rel and "detv2" in tree_rel else "split-v1 ResNet50 (stale)")
     enh = load("concepts/output/enhance_report.json")
     rows = []
     if tree:
@@ -97,10 +119,13 @@ def criteria_section(runs):
                 usable.append(c)
                 rel_ok.append(c) if v.get("meets_C2_relative") else None
         absolute = [c for c, v in enh["concepts"].items() if v.get("meets_C2_absolute")]
-        rows.append({"criterion": "C2 concept validity (ENHANCE)", "target": "ρ ≥ 0.5 (proposed: ≥ a single rater)",
+        rows.append({"criterion": "C2 concept validity (ENHANCE, features v0.2)", "target": "≥ a single rater (agreed 2026-11-04)",
                      "value": "; ".join(parts),
-                     "met": f"absolute: {', '.join(absolute) or 'none'}; relative: {', '.join(rel_ok) or 'none'} "
-                            f"(labels usable only for {', '.join(usable) or 'none'})"})
+                     "met": f"{', '.join(rel_ok) or 'none'} (labels usable only for {', '.join(usable) or 'none'}; "
+                            f"old absolute ρ ≥ 0.5: {', '.join(absolute) or 'none'})"})
+    c2 = c2_coverage()
+    if c2:
+        rows.append(c2)
     if runs:
         best = max(runs.items(), key=lambda kv: kv[1][1]["overall"]["pass_all_rate"] if "template" not in kv[0] else -1)
         o = best[1][1]["overall"]
@@ -496,12 +521,21 @@ def interpretability_section():
 
 
 def final_model_section():
-    """Final model of the classifier sprint (eval/final_model_report.py, eval/final_locked_look.py)."""
-    rel_a, rel_b = "eval/output/stage_c/final/final_model_report.json", "eval/output/stage_c/locked_final/locked_final.json"
+    """Final model (kdv8f_mel s3, adopted 2026-11-04; locked look 2026-11-13) first, then the previous one (kdv6_mel s1)."""
+    parts = [_final_block("## Final model kdv8f_mel s3 (sprint part 3, adopted 2026-11-04)",
+                          "eval/output/stage_c/final_kdv8f_mel_s3/final_model_report.json",
+                          "eval/output/stage_c/locked_final/locked_final_kdv8f_mel_s3.json"),
+             _final_block("## Previous final model kdv6_mel s1 (classifier sprint, stage C)",
+                          "eval/output/stage_c/final/final_model_report.json",
+                          "eval/output/stage_c/locked_final/locked_final.json")]
+    return (chr(10) + chr(10)).join(p for p in parts if p)
+
+
+def _final_block(title, rel_a, rel_b):
     a, b = load(rel_a), load(rel_b)
     if not a:
-        return "## Final model (classifier sprint)" + chr(10) + chr(10) + "Not run yet."
-    out = ["## Final model (classifier sprint, stage C)",
+        return None
+    out = [title,
            f"Run `{a['run']}`; temperature {a['temperature']:.2f}, standard threshold {a['threshold_standard']:.3f}, "
            f"melanoma-head threshold {a['threshold_melanoma_head']:.3f} (all fit on validation data)."]
     rows = []
@@ -530,6 +564,99 @@ def final_model_section():
     return chr(10).join(out[:2] + [chr(10).join([out[2]])] + out[3:]) if False else (chr(10) + chr(10)).join(out)
 
 
+def explanation_source_section():
+    """Surrogate per model and feature table: v1.0 vs v1.1 (+ C2-validated MONET concepts) on kdv6_mel s1, and v1.1 on the
+    final model kdv8f_mel s3 (sprint part 3, adopted 2026-11-04)."""
+    pb = load("concepts/output/phrase_bank_v3.csv")
+    rows, rels = [], []
+    for m, v in (("kdv6_mel_s1", "v1.0"), ("kdv6_mel_s1", "v1.1"), ("kdv8f_mel_s3", "v1.1")):
+        d = f"trees/output_{v}_{m}"
+        rep = load(f"{d}/tree_report.json")
+        if not rep or pb is None or not (ROOT / d / "explanation_inputs.jsonl").exists():
+            continue
+        status = dict(zip(pb.feature_id, pb.status))
+        cases = [json.loads(line) for line in open(ROOT / d / "explanation_inputs.jsonl", encoding="utf-8")]
+        cases = [c for c in cases if c["split"] == "test"]
+        st = [[status.get(r["feature_id"], "untested") for r in c["llm_input"]["top_concepts"]] for c in cases]
+        flat = [s for case in st for s in case]
+        f = rep["fidelity"]["binary_surrogate"]
+        rows.append({"model": m.replace("_s", " s"), "features": v, "citation rule": "r1" if m == "kdv8f_mel_s3" else "v1", "agreement (benign / malignant)": f"{fmt(f['overall'], pct=True)} ({fmt(f['by_true_label']['0'], pct=True)} / "
+                     f"{fmt(f['by_true_label']['1'], pct=True)})", "surrogate AUROC": fmt(rep["test_performance"]["binary_surrogate"]["auroc"]),
+                     "validated reasons": fmt(flat.count("validated") / len(flat), pct=True),
+                     "validated or partial": fmt(sum(s in ("validated", "partial") for s in flat) / len(flat), pct=True),
+                     "failed": fmt(flat.count("failed") / len(flat), pct=True),
+                     "cases with a validated reason": fmt(sum("validated" in s for s in st) / len(st), pct=True)})
+        rels += [f"{d}/tree_report.json", f"{d}/explanation_inputs.jsonl"]
+    if not rows:
+        return "## Explanation source on the final model\n\nNot run yet."
+    return ("## Explanation source (split-v2 test; final model kdv8f_mel s3 from 2026-11-04)\n\n" + table(rows, list(rows[0]))
+            + "\n\nv1.1 = v1.0 + MONET dark pigment, vessels, ulceration/crust; validated features cited over failed ones "
+            "(phrase bank v3).\n\n" + src(*rels, "concepts/output/phrase_bank_v3.csv"))
+
+
+def darker_skin_section():
+    """SCIN tone-detector refit (eval/refit_detectors_scin.py) and the darkness-contrast test (eval/darkness_contrast_dsd.py)."""
+    out, rels = ["## Darker skin: scope detector and darkness shortcut"], []
+    r = load("eval/output/sprint2/refit_scin.json")
+    if r and "+scin/domain" in r["tone"]:
+        t = r["tone"]
+        rows = [{"detector": k, "SCIN-test dark sens": fmt(t[k]["by_set"].get("test/scin", {}).get("sens")),
+                 "v2 test flagged": fmt(t[k]["flagged_share"]["v2_test"]), "DSD V-VI flagged": fmt(t[k]["flagged_share"]["dsd_fst56"]),
+                 "SCIN light flagged": fmt(t[k]["flagged_share"]["scin_test_light"]),
+                 "MIDAS dev_test flagged": fmt(t[k]["flagged_share"]["midas_dev_test"]),
+                 "AUROC close-up / phone": f"{fmt(t[k]['by_set']['test/close-up']['auroc'])} / {fmt(t[k]['by_set']['test/phone']['auroc'])}",
+                 "adopted": {"base": "—"}.get(k, "yes" if t.get(f"adoption {k}", {}).get("adopt") else "no")}
+                for k in ("base", "+scin", "+scin/domain")]
+        out.append(table(rows, list(rows[0])))
+        rels.append("eval/output/sprint2/refit_scin.json")
+    dc = load("eval/output/darkness_contrast/dsd.json")
+    if dc:
+        h1, h2 = dc["H1_feature_by_fst"], dc["H2_shap_missed_vs_caught"]
+        out.append("Darkness vs skin on the dev set (FST V-VI minus IV, median [95% CI]): benign "
+                   f"{h1['label 0']['diff_V-VI_minus_IV']:+.1f} [{h1['label 0']['ci95'][0]:.1f}, {h1['label 0']['ci95'][1]:.1f}], malignant "
+                   f"{h1['label 1']['diff_V-VI_minus_IV']:+.1f} [{h1['label 1']['ci95'][0]:.1f}, {h1['label 1']['ci95'][1]:.1f}]. "
+                   "SHAP of the feature (S1 v1.0 tree), missed minus caught cancers: "
+                   + ", ".join(f"FST {k} {v['shap_diff_missed_minus_caught']:+.2f} [{v['ci95'][0]:.2f}, {v['ci95'][1]:.2f}] "
+                               f"(sensitivity {v['sensitivity']:.2f}, {v['n_missed']} missed)" for k, v in h2.items()) + ".")
+        rels.append("eval/output/darkness_contrast/dsd.json")
+    pc = load("eval/output/passion/tone_check.json")
+    if pc:  # adopted detector on PASSION (decision 2026-11-04; descriptive, nothing fitted)
+        rows = [{"PASSION split": k, "images (subjects)": f"{pc[k]['n_images']} ({pc[k]['n_subjects']})",
+                 **{f"FST {f} flagged": fmt(v) for f, v in pc[k]["flagged_by_fst"].items()},
+                 "V-VI sensitivity": fmt(pc[k]["sensitivity_dark"]), "III-IV specificity": fmt(pc[k]["specificity_fst3_4"]),
+                 "AUROC V-VI vs III-IV": fmt(pc[k]["auroc"]), "phone route": fmt(pc[k]["routed_phone"])}
+                for k in ("test", "all")]
+        out.append("Adopted detector on PASSION (African field photos, not used in fitting; pelvic and no-site subjects "
+                   "excluded):\n\n" + table(rows, list(rows[0])))
+        rels.append("eval/output/passion/tone_check.json")
+    if len(out) == 1:
+        return out[0] + "\n\nNot run yet."
+    return "\n\n".join(out + [src(*rels)])
+
+
+def checks_1030_section():
+    """MIDAS calibrated size check (eval/midas_diameter_check.py) and precision of NLI-only flags (Claude labels)."""
+    out, rels = ["## Size proxy and NLI-flag precision (2026-10-30)"], []
+    m = load("eval/output/midas_diameter/check.json")
+    if m:
+        out.append("MIDAS phone photos at fixed distance, frame-relative mask Feret vs measured length (Spearman [95% CI]; "
+                   "CV median % error vs always-median): " + "; ".join(
+                       f"{k} {v['spearman_feret_vs_length']:+.2f} [{v['ci95'][0]:+.2f}, {v['ci95'][1]:+.2f}], "
+                       f"{fmt(v['cv_median_abs_pct_error_length'], pct=True)} vs {fmt(v['baseline_median_abs_pct_error'], pct=True)} (n {v['n']})"
+                       for k, v in m.items() if isinstance(v, dict)) + ".")
+        rels.append("eval/output/midas_diameter/check.json")
+    n = load("explain/output/nli_only_flags_precision_2026-10-30.json")
+    if n:
+        rows = [{"generator": k, "labelled": v["n_labelled"], "unfaithful": f"{fmt(v['precision_unfaithful'], pct=True)} "
+                 f"[{fmt(v['ci95'][0], pct=True)}, {fmt(v['ci95'][1], pct=True)}]", "omits direction": v["omits_direction"],
+                 "any defect": fmt(v["precision_any_defect"], pct=True)} for k, v in n.items() if isinstance(v, dict)]
+        out.append("Claims flagged only by NLI (rules pass), labelled by Claude (not human):\n\n" + table(rows, list(rows[0])))
+        rels.append("explain/output/nli_only_flags_precision_2026-10-30.json")
+    if len(out) == 1:
+        return out[0] + "\n\nNot run yet."
+    return "\n\n".join(out + [src(*rels)])
+
+
 def main(opts):
     try:
         commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True,
@@ -545,6 +672,7 @@ def main(opts):
         criteria_section(runs), baseline_section(), masks_section(), trees_section(), concepts_section(),
         llm_section(runs), c6_gradcam_section(), new_checks_section(), d5_section(), judge_section(),
         model_comparison_section(), external_section(), sprint_section(), final_model_section(), interpretability_section(),
+        explanation_source_section(), darker_skin_section(), checks_1030_section(),
     ]
     out = Path(opts.out)
     out.write_text("\n\n".join(parts) + "\n", encoding="utf-8", newline="\n")

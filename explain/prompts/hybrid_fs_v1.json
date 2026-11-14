@@ -1,0 +1,72 @@
+{
+  "version": "hybrid_fs_v1",
+  "mode": "reasons_only",
+  "strategy": "T5.1(b) few-shot: hybrid_v1 plus two worked examples on features chosen to differ from most real cases; copying is measured by explain/fewshot_copy.py",
+  "system": "You write the reason sentences of an explanation of a skin-lesion classifier's prediction for a {audience}. The summary, warnings and limitations are written separately; do not write any of them and do not add warnings of your own.\nYou are given the prediction and up to three evidence items. Write exactly one sentence per evidence item, in the given order. Each sentence must cite its item by copying feature_id and direction exactly, and must use only that item's measure, finding, relative_to_benign and strength. Say clearly whether the item supports or argues against the predicted class, matching its direction field: if direction is \"argues_against\", write \"argues against the <prediction> prediction\".\nStrict rules: no digits or numbers; no structures, colors, sizes, diagnoses, risk factors or advice that are not in the item; no treatment advice; do not sound more certain than the item's strength.\nOutput one JSON object only: {{\"reasons\": [{{\"feature_id\": str, \"direction\": \"supports\"|\"argues_against\", \"text\": str}}]}}.",
+  "user": "Example 1\nPrediction: benign\nEvidence:\n[\n {{\n  \"feature_id\": \"B_convexity\",\n  \"concept\": \"border\",\n  \"measure\": \"border contour\",\n  \"finding\": \"smooth\",\n  \"relative_to_benign\": \"typical of benign lesions\",\n  \"direction\": \"supports\",\n  \"strength\": \"moderate\",\n  \"clinically_mapped\": true\n }},\n {{\n  \"feature_id\": \"C_frac_blue_gray\",\n  \"concept\": \"color\",\n  \"measure\": \"share of blue-gray areas\",\n  \"finding\": \"high\",\n  \"relative_to_benign\": \"higher than in most benign lesions\",\n  \"direction\": \"argues_against\",\n  \"strength\": \"weak\",\n  \"clinically_mapped\": true\n }}\n]\n\nJSON: {{\"reasons\": [{{\"feature_id\": \"B_convexity\", \"direction\": \"supports\", \"text\": \"The border contour is smooth, as is typical of benign lesions, which moderately supports the benign prediction.\"}}, {{\"feature_id\": \"C_frac_blue_gray\", \"direction\": \"argues_against\", \"text\": \"The share of blue-gray areas is higher than in most benign lesions, which weakly argues against the benign prediction.\"}}]}}\n\nExample 2\nPrediction: malignant\nEvidence:\n[\n {{\n  \"feature_id\": \"A_shape_asym_max\",\n  \"concept\": \"asymmetry\",\n  \"measure\": \"shape symmetry\",\n  \"finding\": \"asymmetric\",\n  \"relative_to_benign\": \"much more asymmetric than most benign lesions\",\n  \"direction\": \"supports\",\n  \"strength\": \"strong\",\n  \"clinically_mapped\": true\n }}\n]\n\nJSON: {{\"reasons\": [{{\"feature_id\": \"A_shape_asym_max\", \"direction\": \"supports\", \"text\": \"The lesion's shape is much more asymmetric than in most benign lesions, which strongly supports the malignant prediction.\"}}]}}\n\nNow the real case. Write new sentences for its own items; never reuse an example sentence.\nPrediction: {prediction}\nEvidence:\n{evidence_json}\n\nJSON:",
+  "examples": [
+    {
+      "prediction": "benign",
+      "evidence": [
+        {
+          "feature_id": "B_convexity",
+          "concept": "border",
+          "measure": "border contour",
+          "finding": "smooth",
+          "relative_to_benign": "typical of benign lesions",
+          "direction": "supports",
+          "strength": "moderate",
+          "clinically_mapped": true
+        },
+        {
+          "feature_id": "C_frac_blue_gray",
+          "concept": "color",
+          "measure": "share of blue-gray areas",
+          "finding": "high",
+          "relative_to_benign": "higher than in most benign lesions",
+          "direction": "argues_against",
+          "strength": "weak",
+          "clinically_mapped": true
+        }
+      ],
+      "output": {
+        "reasons": [
+          {
+            "feature_id": "B_convexity",
+            "direction": "supports",
+            "text": "The border contour is smooth, as is typical of benign lesions, which moderately supports the benign prediction."
+          },
+          {
+            "feature_id": "C_frac_blue_gray",
+            "direction": "argues_against",
+            "text": "The share of blue-gray areas is higher than in most benign lesions, which weakly argues against the benign prediction."
+          }
+        ]
+      }
+    },
+    {
+      "prediction": "malignant",
+      "evidence": [
+        {
+          "feature_id": "A_shape_asym_max",
+          "concept": "asymmetry",
+          "measure": "shape symmetry",
+          "finding": "asymmetric",
+          "relative_to_benign": "much more asymmetric than most benign lesions",
+          "direction": "supports",
+          "strength": "strong",
+          "clinically_mapped": true
+        }
+      ],
+      "output": {
+        "reasons": [
+          {
+            "feature_id": "A_shape_asym_max",
+            "direction": "supports",
+            "text": "The lesion's shape is much more asymmetric than in most benign lesions, which strongly supports the malignant prediction."
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -7,8 +7,8 @@ certainty). Each entry gives the reason, the evidence, what to say instead, and 
 The English stems for diagnoses, advice and certainty come from explain/verifier.py, so the list and the checker
 agree; the French stems are for a French verifier (not built yet). French wording is a DRAFT for the reviewer.
 
-    python concepts/avoided_terms.py   # -> concepts/output/{avoided_terms_v1_en_fr.csv, phrase_bank_v1_en_fr.csv,
-                                       #    clinical_review_v1_en_fr.md}
+    python concepts/avoided_terms.py   # -> concepts/output/{avoided_terms_v3_en_fr.csv, phrase_bank_v3_en_fr.csv,
+                                       #    clinical_review_v3_en_fr.md}   (phrase bank v3 = + validated MONET concepts)
 """
 import re
 import sys
@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "explain"))
 import lang_fr  # noqa: E402
 import verifier  # noqa: E402
 
-VERSION = "avoided_terms_v1_en_fr_draft"
+VERSION = "avoided_terms_v3_en_fr_draft"
 MONET = "MILK10k MONET scores vs our features (clinical photos)"
 
 # (category, term EN, term FR, reason, evidence, say instead EN, say instead FR, stems EN, stems FR)
@@ -33,12 +33,12 @@ AVOIDED = [
      ["erythem"], ["érythèm", "erythem"]),
     ("failed validation", "vessels / vascular structures / telangiectasia",
      "vaisseaux / structures vasculaires / télangiectasies",
-     "Red-area features do not track vessels; vascular patterns need dermoscopy.",
+     "Red-area features do not track vessels; only the MONET vessel score (validated, feature table v1.1) may name them, in its fixed words.",
      f"{MONET}: vessels vs red-area share 0.16, vs red tone -0.02; Derm7pt vascular structures (VLM) kappa <= 0.40",
      "share of red-toned areas", "proportion de zones de teinte rouge",
      ["vessel", "vascular", "telangiect", "arboriz"], ["vaisseau", "vasculaire", "télangiect", "arboris"]),
     ("failed validation", "ulceration / crust", "ulcération / croûte",
-     "Texture and yellow-tone features do not track ulceration or crust.",
+     "Texture and yellow-tone features do not track ulceration or crust; only the MONET score (validated, feature table v1.1) may name them, in its fixed words.",
      f"{MONET}: ulceration/crust vs roughness 0.14, vs texture contrast 0.14, vs yellow tone -0.07",
      "fine-scale image texture; yellow tone relative to surrounding skin",
      "texture de l'image à petite échelle; teinte jaune par rapport à la peau environnante",
@@ -110,11 +110,19 @@ COLUMNS = ["category", "term_en", "term_fr", "reason", "evidence", "say_instead_
            "stems_en", "stems_fr"]
 
 
+# Measures of the C2-validated MONET concepts (feature table v1.1): they may name vessels and ulceration/crust, but
+# only in these fixed words; the same terms anywhere else are still flagged.
+MONET_IDS = ("C_monet_dark_pigment", "C_monet_vessels", "T_monet_ulceration_crust")
+
+
 def strip_limitations(text):
-    """The fixed limitation sentences may name size/millimetres/evolution to say they cannot be assessed."""
+    """The fixed limitation sentences may name size/millimetres/evolution to say they cannot be assessed; the fixed
+    MONET measures may name the concept they validated against."""
     from llm_input import LIMITATIONS
-    for sentence in LIMITATIONS + lang_fr.LIMITATIONS_FR:
-        text = text.replace(sentence, " ")
+    from template import PHRASES
+    monet = [PHRASES[f][0] for f in MONET_IDS] + [lang_fr.PHRASES_FR[f][0] for f in MONET_IDS]
+    for sentence in LIMITATIONS + lang_fr.LIMITATIONS_FR + monet:
+        text = re.sub(re.escape(sentence), " ", text, flags=re.I)
     return text
 
 
@@ -134,7 +142,7 @@ def avoided_table():
 
 
 def bilingual_phrase_bank():
-    pb = pd.read_csv(ROOT / "concepts/output/phrase_bank_v1.csv")
+    pb = pd.read_csv(ROOT / "concepts/output/phrase_bank_v3.csv")
 
     def fr(fid):
         if fid.startswith("S_hu"):
@@ -151,7 +159,7 @@ def bilingual_phrase_bank():
 def review_doc(pb, av):
     shown = pb[pb.explanation_wording != "—"]
     lines = [
-        "# Clinical vocabulary review / Révision du vocabulaire clinique (v1, EN + FR-QC)",
+        "# Clinical vocabulary review / Révision du vocabulaire clinique (v3, EN + FR-QC)",
         "",
         "For the clinical reviewer (role 1 in the dermatologist request). Please mark each row **OK**, **change "
         "(suggestion)** or **remove**. French wording is a draft in Quebec French and needs your approval before any "
@@ -161,7 +169,11 @@ def review_doc(pb, av):
         "Status: *validated* = agrees with expert labels at least as well as a single human rater; *partial* = some "
         "agreement; *failed* = tested and does not track the concept; *untestable* = available labels unreliable; "
         "*untested* = no labelled data yet. For failed or untested features the wording describes the image property, "
-        "not a clinical sign.",
+        "not a clinical sign. **New in v3:** three concepts scored by an image-text model (MONET) passed validation "
+        "against dermatologist labels on clinical photos (dark pigment, vessels, ulceration/crust; rows marked "
+        "`C_monet_*` / `T_monet_*`). Only these three may use those clinical words, in their fixed wording; elsewhere "
+        "the avoided-terms list still applies. *Nouveau en v3 : trois concepts (pigment foncé, vaisseaux, "
+        "ulcération/croûte) ont été validés et peuvent porter ces mots cliniques, dans leur libellé fixe.*",
         "",
         "## 1. Phrases used in explanations / Termes utilisés dans les explications",
         "",
@@ -198,16 +210,25 @@ def review_doc(pb, av):
               "2. 'Shape symmetry: asymmetric' repeats the measure's own word. Better: 'shape: asymmetric'? / "
               "*« Symétrie de la forme : asymétrique » : préférez-vous « forme : asymétrique »?*",
               "3. Reader: dermatologist or general practitioner? / *Lectorat : dermatologue ou médecin de famille?*",
-              "4. Anything a dermatologist would expect to see that is missing? / *Manque-t-il un élément attendu?*", ""]
+              "4. Anything a dermatologist would expect to see that is missing? / *Manque-t-il un élément attendu?*",
+              "5. The three validated MONET rows name dark pigment, vessels and ulceration/crust in a whole-image score, "
+              "not a located finding. Is 'visibility of blood vessels: high' acceptable for a clinical photograph, and "
+              "is the wording right? / *Ces trois mesures portent sur l'image entière : le libellé est-il acceptable?*",
+              "6. On darker skin (Fitzpatrick V–VI) the tool shows 'darker skin: not validated' instead of an "
+              "explanation. Acceptable wording and behaviour? / *Sur peau foncée, l'outil indique « peau foncée : non "
+              "validé » plutôt qu'une explication : libellé et comportement acceptables?*",
+              "7. 'Pigmentation relative to surrounding skin: dark' currently counts toward benign in some darker "
+              "lesions (a model shortcut we are testing to remove). Should explanations show this reason at all? / "
+              "*Ce motif (lésion plus foncée que la peau) peut pousser vers « bénin » : faut-il l'afficher?*", ""]
     return "\n".join(lines)
 
 
 def main():
     out = ROOT / "concepts/output"
     av, pb = avoided_table(), bilingual_phrase_bank()
-    av.to_csv(out / "avoided_terms_v1_en_fr.csv", index=False, encoding="utf-8-sig")
-    pb.to_csv(out / "phrase_bank_v1_en_fr.csv", index=False, encoding="utf-8-sig")
-    (out / "clinical_review_v1_en_fr.md").write_text(review_doc(pb, av), encoding="utf-8")
+    av.to_csv(out / "avoided_terms_v3_en_fr.csv", index=False, encoding="utf-8-sig")
+    pb.to_csv(out / "phrase_bank_v3_en_fr.csv", index=False, encoding="utf-8-sig")
+    (out / "clinical_review_v3_en_fr.md").write_text(review_doc(pb, av), encoding="utf-8")
     print(f"{len(av)} avoided-term entries, {len(pb)} phrase-bank rows -> {out}")
 
 
